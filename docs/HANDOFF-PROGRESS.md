@@ -13,14 +13,14 @@ Use this document to continue development with a new agent or session. It summar
   - OpenSpec change in `openspec/changes/add-pi-terminal-world-monitor-client/`; `tasks.md` updated with completed items.
 
 - **Backend (VPS)**
-  - FastAPI app: `GET /health`, `GET /panels`, `GET /panels/world-clock`, `GET /panels/weather`, `GET /panels/global-situation-map`, **`GET /panels/crypto/top`**, **`GET /panels/crypto/stablecoins`**, **`GET /panels/crypto/btc-etf`**.
+  - FastAPI app: `GET /health`, `GET /panels`, `GET /panels/world-clock`, `GET /panels/weather`, `GET /panels/global-situation-map`, **`GET /panels/crypto/top`**, **`GET /panels/crypto/stablecoins`**, **`GET /panels/crypto/news`**, **`GET /panels/crypto/btc-etf`**.
   - Panel list puts **crypto first** (top-left slot). World Clock, Weather (Open-Meteo by continent), Global Situation Map. **Crypto**: CoinGecko free API for top 1–12 / 13–24 (price, 24h%), stablecoins (status, mcap, volume, ON PEG); BTC ETF endpoint is a **stub** (see below).
   - Deployed on DigitalOcean droplet **209.38.141.129** (Ubuntu 24.10). Run: `cd /opt/pi-terminal-world-monitor-client/backend && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000`. After code changes on GitHub: `git pull` on droplet then restart uvicorn.
 
 - **Go client (recommended)**
   - `client-go/`: Go 1.21 + [tview](https://github.com/rivo/tview). Build: `go mod tidy && go build -o pi-world-monitor-client .`
   - Env: `BACKEND_URL`, `CYCLE_SECONDS` (default 8), `GRID_COLS` / `GRID_ROWS` (default 2×2; use e.g. 3×3 for more, smaller panels). Press **Q** to quit.
-  - **Crypto** (top-left): 3 sub-panels cycling every 6s – (1) Top 12 cryptos by mcap, (2) Top 13–24, (3) Stablecoins (status, mcap, volume, peg health), (4) BTC ETF Tracker (stub message). Price change green/red. Weather Watch: continent cycling, heat map, icons. Global Situation Map: severity color-coded. All use **QueueUpdateDraw** so panels refresh without keypress.
+  - **Crypto** (top-left): **4 sub-panels in 2×2**, each with its own border and **individual timer**: (1) **Top Cryptos** (top-left) – cycles **1–12 / 13–24 every 16s**; (2) **Stablecoins** (top-right) – status, mcap, volume, peg health, refresh 6s; (3) **Crypto News** (bottom-left) – headlines from backend RSS, refresh 6s; (4) **BTC ETF Tracker** (bottom-right) – stub for now, refresh 6s. Price changes green/red. Weather Watch: continent cycling, heat map, icons. Global Situation Map: severity color-coded. All use **QueueUpdateDraw** so panels refresh without keypress.
 
 - **Python client**
   - `client/`: Python + blessed. Multi-panel grid; use if Go isn’t available. Run: `python -m client` from `client/` with venv and `BACKEND_URL` set.
@@ -35,6 +35,11 @@ Use this document to continue development with a new agent or session. It summar
 - **BTC ETF Tracker** – backend and client stub in place; needs real data source (see Crypto + BTC ETF section below).
 - Terminal **sparklines/graphs** for crypto (e.g. ASCII/Unicode mini-charts) – not yet implemented.
 - Remaining panel categories; Global Situation Map stub; formal OpenAPI; Pi 3B validation.
+
+### Recently done (this session)
+
+- **Crypto News** – Backend `GET /panels/crypto/news` (CoinDesk RSS, 5 min cache). Go client **Crypto News** sub-panel.
+- **Crypto panel layout** – Re-laid to **4 sub-panels in 2×2**: Top Cryptos (top-left), Stable Coins (top-right), Crypto News (bottom-left), BTC ETF Tracker (bottom-right). Each has its own refresh timer; **Top Cryptos** cycles 1–12 / 13–24 every **16 seconds** (per user sketch).
 
 ---
 
@@ -77,6 +82,8 @@ curl -s http://209.38.141.129:8000/panels/world-clock
 
 ## Next steps (for the next agent)
 
+**Crypto panel (done):** The crypto slot now shows **3 sub-panels at once**, each with borders: Top cryptos (cycles 1–12 / 13–24 every 6s), Stablecoins, BTC ETF Tracker. Only the top-cryptos content and title cycle; all three refresh every 6s.
+
 1. ~~**Backend: real Weather data (task 3.4)**~~ **Done.** Open-Meteo wired in `backend/app/panels.py`; 10 min cache; London, New York, Tokyo, Berlin.
 
 2. ~~**Backend: Global Situation Map (tasks 2.3, 3.5)**~~ **Done.** Schema: `regions[]` with `name`, `severity`, `events[]`. Endpoint `GET /panels/global-situation-map`; stub data (pipeline ready for real feeds). Go client renders with severity colors.
@@ -96,24 +103,63 @@ curl -s http://209.38.141.129:8000/panels/world-clock
 
 ## Crypto panel and BTC ETF (for next agent)
 
-The **Crypto** panel occupies the **top-left** slot and cycles through four sub-views every 6 seconds:
+The **Crypto** panel occupies the **top-left** slot and shows **4 bordered sub-panels in a 2×2 grid**:
 
-1. **Top cryptos 1–12** – `GET /panels/crypto/top?range_start=1` (CoinGecko). Shows rank, symbol, price, 24h% (green/red), 7d% when available.
-2. **Top cryptos 13–24** – `GET /panels/crypto/top?range_start=13`.
-3. **Stablecoins** – `GET /panels/crypto/stablecoins`. Status (Healthy/Caution), market cap, volume, per-coin PEG HEALTH (ON PEG / OFF PEG + deviation %).
-4. **BTC ETF Tracker** – `GET /panels/crypto/btc-etf`. **Currently a stub.** Backend returns `status`, `message`, empty `etfs`, null `total_flows_24h`, `total_aum`.
+1. **Top Cryptos** (top-left) – Border title toggles "Top cryptos (1-12)" / "Top cryptos (13-24)". **Own timer: 16s per range**; cycles between `GET /panels/crypto/top?range_start=1` and `range_start=13` (CoinGecko). Content: rank, symbol, price, 24h% (green/red), 7d% when available.
+2. **Stablecoins** (top-right) – `GET /panels/crypto/stablecoins`. Status (Healthy/Caution), market cap, volume, per-coin PEG HEALTH. Refreshes every 6s (own timer).
+3. **Crypto News** (bottom-left) – `GET /panels/crypto/news`. Headlines from CoinDesk RSS; backend caches 5 min. Refreshes every 6s (own timer).
+4. **BTC ETF Tracker** (bottom-right) – `GET /panels/crypto/btc-etf`. **Currently a stub.** Backend returns `status`, `message`, empty `etfs`, null `total_flows_24h`, `total_aum`.
+
+Implementation: `client-go/main.go` builds a 2×2 `tview.Flex` (two rows of two columns); each sub-panel has its **own goroutine/timer** (Top Cryptos 16s, others 6s).
 
 ### What to implement for BTC ETF Tracker (World Monitor parity)
 
 - **Backend** (`backend/app/panels.py`): Replace the stub in `crypto_btc_etf()` with a real data pipeline. World Monitor ([github.com/koala73/worldmonitor](https://github.com/koala73/worldmonitor)) pulls BTC ETF stats – flows (in/out), AUM, per-ETF breakdown. Use a **free** source and cache with TTL. Expose: list of ETFs with name, flows 24h, AUM; aggregates (total flows 24h, total AUM).
-- **Client** (`client-go/main.go`): In `renderCryptoBtcEtf()`, parse the real response and render total flows (green/red by sign), total AUM, and per-ETF table. Keep 6s cycle.
+- **Client** (`client-go/main.go`): In `renderCryptoBtcEtf()`, parse the real response and render total flows (green/red by sign), total AUM, and per-ETF table. The BTC ETF sub-panel is the third of the 3 stacked sub-panels; it already refreshes every 6s with the others.
 - **Terminal graphs for crypto**: For top-cryptos sub-panels, consider ASCII/Unicode sparklines (e.g. `▁▂▃▄▅▆▇█`). CoinGecko `market_chart` can provide history; backend could return a short series; client renders one-line sparkline per coin.
 
 ### Backend response shapes (reference)
 
 - **`/panels/crypto/top`**: `{ "status", "range", "coins": [ { "rank", "symbol", "name", "price", "price_24h_pct", "price_7d_pct" } ] }`
 - **`/panels/crypto/stablecoins`**: `{ "status", "status_label", "market_cap_b", "volume_b", "coins": [ { "symbol", "name", "price", "peg_status", "deviation_pct" } ] }`
+- **`/panels/crypto/news`**: `{ "status", "source": "rss", "items": [ { "title", "link", "pub_date" } ] }`
 - **`/panels/crypto/btc-etf`** (target): `{ "status", "etfs": [ { "name", "flows_24h", "aum" } ], "total_flows_24h", "total_aum" }`
+
+---
+
+## User layout sketches (target design for next agent)
+
+The user provided **hand-drawn sketches** of the desired dashboard layout. Use these as the source of truth for the final UI.
+
+**Screenshot locations (in this repo):**
+- `assets/image-c7817cce-3fb5-45da-87c1-81a319f5cbc3.png` – Overall 2×2 grid layout and Crypto sub-panel arrangement
+- `assets/image-3008fbb0-d000-4718-9a1b-5cc6cb292525.png` – Timing/rotation notes and “individual timer” requirement
+
+**Main grid (from sketch):**
+- **Top row:** Crypto (left) | Weather Watch (right)
+- **Bottom row:** Global Situation Map (left) | World Clock (right)
+- All four panels have clear borders.
+
+**Crypto panel – target layout (from sketch):**
+Inside the Crypto panel there are **4 bordered sub-panels** (not 3):
+1. **Top Cryptos** – top-left; list of items; **rotates individually**
+2. **Stable Coins** – top-middle; list content
+3. **Crypto News** – top-right; list content *(new – not yet implemented; needs backend + client)*
+4. **BTC ETF Tracker** – below Stable Coins (or similar position); list content
+
+So the Crypto area should be a 2×2 or similar grid of four sub-panels, each with borders, not a single column of three.
+
+**Timing (from sketch):**
+- **Top Cryptos:** Show “Top 1–12” for **16 seconds**, then “Top 13–24” for **16 seconds**, then repeat. This sub-panel **rotates individually** (its own timer).
+- **Rule from sketch:** “Each panel subpanel in rotation needs an individual timer, and data should refresh constantly.”
+- So: each sub-panel that has rotating or updating content should have its **own timer**; data across panels should **refresh constantly** (e.g. periodic refetch), not only when the user interacts.
+
+**Next agent tasks implied by sketches (done this session):**
+1. ~~Re-layout the Crypto panel into **4 bordered sub-panels** (Top Cryptos, Stable Coins, Crypto News, BTC ETF Tracker) in 2×2.~~
+2. ~~Change Top Cryptos timing to **16s per range** (1–12 then 13–24), with its **own dedicated timer**.~~
+3. ~~Give each rotating/updating sub-panel its **own timer**; ensure data **refreshes constantly**.~~
+4. ~~Add **Crypto News** sub-panel: backend `GET /panels/crypto/news` (RSS) + client renderer; include in the Crypto 4-subpanel layout.~~
+5. Keep Weather Watch, Global Situation Map, and World Clock as in the 2×2 main grid; no change to their content from the sketches.
 
 ---
 

@@ -78,7 +78,7 @@ type globalSituationMapResp struct {
 	Message string      `json:"message"`
 }
 
-// Crypto panel (3 sub-panels: top 1-12, top 13-24, stablecoins, btc-etf)
+// Crypto panel (4 sub-panels: top cryptos, stablecoins, crypto news, btc-etf)
 type cryptoCoin struct {
 	Rank        int      `json:"rank"`
 	Symbol      string   `json:"symbol"`
@@ -110,11 +110,30 @@ type cryptoStablecoinsResp struct {
 	Coins       []cryptoStablecoin  `json:"coins"`
 }
 
+type cryptoBtcEtfEntry struct {
+	Name     string  `json:"name"`
+	Flows24h float64 `json:"flows_24h"`
+	Aum      float64 `json:"aum"`
+}
+
 type cryptoBtcEtfResp struct {
-	Status        string `json:"status"`
-	Message       string `json:"message"`
-	TotalFlows24h interface{} `json:"total_flows_24h"`
-	TotalAum      interface{} `json:"total_aum"`
+	Status        string              `json:"status"`
+	Message       string              `json:"message"`
+	Etfs          []cryptoBtcEtfEntry `json:"etfs"`
+	TotalFlows24h interface{}         `json:"total_flows_24h"`
+	TotalAum      interface{}         `json:"total_aum"`
+}
+
+type cryptoNewsItem struct {
+	Title   string `json:"title"`
+	Link    string `json:"link"`
+	PubDate string `json:"pub_date"`
+}
+
+type cryptoNewsResp struct {
+	Status string          `json:"status"`
+	Source string          `json:"source"`
+	Items  []cryptoNewsItem `json:"items"`
 }
 
 func getEnv(key, fallback string) string {
@@ -259,9 +278,28 @@ func renderWeather(baseURL string) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
+// fmtPrice formats price with commas and decimals for readability (e.g. 66825 → $66,825.00).
 func fmtPrice(p float64) string {
+	var s string
 	if p >= 1 {
-		return fmt.Sprintf("$%.0f", p)
+		s = fmt.Sprintf("%.2f", p)
+		// Insert commas for thousands
+		dot := strings.Index(s, ".")
+		intPart := s
+		if dot >= 0 {
+			intPart = s[:dot]
+		}
+		var b strings.Builder
+		for i, r := range intPart {
+			if i > 0 && (len(intPart)-i)%3 == 0 {
+				b.WriteString(",")
+			}
+			b.WriteRune(r)
+		}
+		if dot >= 0 {
+			b.WriteString(s[dot:])
+		}
+		return "$" + b.String()
 	}
 	if p >= 0.01 {
 		return fmt.Sprintf("$%.2f", p)
@@ -289,7 +327,6 @@ func renderCryptoTop(baseURL string, rangeStart int) string {
 		return "No data"
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf(" [yellow]Top %s by mcap[-]\n", d.Range))
 	for _, c := range d.Coins {
 		p24 := "—"
 		if c.Price24hPct != nil {
@@ -339,27 +376,58 @@ func renderCryptoBtcEtf(baseURL string) string {
 	if err := fetchJSON(baseURL, "/panels/crypto/btc-etf", &d); err != nil {
 		return "No data"
 	}
+	if len(d.Etfs) > 0 || d.TotalFlows24h != nil || d.TotalAum != nil {
+		var b strings.Builder
+		if d.TotalFlows24h != nil {
+			if f, ok := d.TotalFlows24h.(float64); ok {
+				tag := "[green]"
+				if f < 0 {
+					tag = "[red]"
+				}
+				b.WriteString(fmt.Sprintf("  Flows 24h: %s%+.0f[-] M\n", tag, f))
+			}
+		}
+		if d.TotalAum != nil {
+			if a, ok := d.TotalAum.(float64); ok {
+				b.WriteString(fmt.Sprintf("  Total AUM: %.1f B\n", a))
+			}
+		}
+		for _, e := range d.Etfs {
+			b.WriteString(fmt.Sprintf("  %s flows %+.0f AUM %.1f B\n", e.Name, e.Flows24h, e.Aum))
+		}
+		return strings.TrimSuffix(b.String(), "\n")
+	}
 	if d.Message != "" {
 		return d.Message
 	}
 	return "BTC ETF data TBD"
 }
 
-// renderCrypto cycles: top 1-12, top 13-24, stablecoins, btc-etf (time-based, every 6s).
-func renderCrypto(baseURL string) string {
-	const cryptoSubpanelCycleSecs = 6
-	elapsed := int(time.Since(weatherStartTime).Seconds())
-	idx := (elapsed / cryptoSubpanelCycleSecs) % 4
-	switch idx {
-	case 0:
-		return renderCryptoTop(baseURL, 1)
-	case 1:
-		return renderCryptoTop(baseURL, 13)
-	case 2:
-		return renderCryptoStablecoins(baseURL)
-	default:
-		return renderCryptoBtcEtf(baseURL)
+func renderCryptoNews(baseURL string) string {
+	var d cryptoNewsResp
+	if err := fetchJSON(baseURL, "/panels/crypto/news", &d); err != nil {
+		return "No data"
 	}
+	if d.Status != "ok" || len(d.Items) == 0 {
+		return "No headlines"
+	}
+	var b strings.Builder
+	for i, it := range d.Items {
+		if i >= 8 {
+			break
+		}
+		title := it.Title
+		if len(title) > 55 {
+			title = title[:52] + "..."
+		}
+		b.WriteString(fmt.Sprintf("  %s\n", title))
+	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// renderCrypto is used only when crypto is a single panel (legacy); prefer crypto 3-subpanel layout.
+func renderCrypto(baseURL string) string {
+	return renderCryptoTop(baseURL, 1)
 }
 
 func renderGlobalSituationMap(baseURL string) string {
@@ -483,20 +551,43 @@ func main() {
 		SetRows(gridRows...).
 		SetBorders(false)
 
-	// One TextView per cell; we'll update them on refresh
+	// One TextView per cell (or a Flex for crypto with 4 sub-panels in 2×2)
 	textViews := make([]*tview.TextView, n)
+	var cryptoSubpanelViews [4]*tview.TextView
 	for i := 0; i < n; i++ {
 		key := panels[i]
+		row, col := i/cols, i%cols
+		if key == "crypto" {
+			// Crypto: 4 bordered sub-panels in 2×2 (Top Cryptos | Stable Coins; Crypto News | BTC ETF)
+			tvTop := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoTop(baseURL, 1))
+			tvTop.SetBorder(true).SetTitle(" Top cryptos (1-12) ")
+			tvStable := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoStablecoins(baseURL))
+			tvStable.SetBorder(true).SetTitle(" Stablecoins ")
+			tvNews := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoNews(baseURL))
+			tvNews.SetBorder(true).SetTitle(" Crypto News ")
+			tvBtc := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoBtcEtf(baseURL))
+			tvBtc.SetBorder(true).SetTitle(" BTC ETF Tracker ")
+			cryptoSubpanelViews[0], cryptoSubpanelViews[1], cryptoSubpanelViews[2], cryptoSubpanelViews[3] = tvTop, tvStable, tvNews, tvBtc
+			topRow := tview.NewFlex().SetDirection(tview.FlexColumn).
+				AddItem(tvTop, 0, 1, false).
+				AddItem(tvStable, 0, 1, false)
+			botRow := tview.NewFlex().SetDirection(tview.FlexColumn).
+				AddItem(tvNews, 0, 1, false).
+				AddItem(tvBtc, 0, 1, false)
+			cryptoFlex := tview.NewFlex().SetDirection(tview.FlexRow).
+				AddItem(topRow, 0, 1, false).
+				AddItem(botRow, 0, 1, false)
+			grid.AddItem(cryptoFlex, row, col, 1, 1, 0, 0, false)
+			textViews[i] = nil
+			continue
+		}
 		title := panelTitle(key)
 		content := panelContent(baseURL, key)
-
 		tv := tview.NewTextView().
 			SetDynamicColors(true).
 			SetText(content)
 		tv.SetBorder(true).SetTitle(" " + title + " ")
-
 		textViews[i] = tv
-		row, col := i/cols, i%cols
 		grid.AddItem(tv, row, col, 1, 1, 0, 0, false)
 	}
 
@@ -558,19 +649,77 @@ func main() {
 		}()
 	}
 
-	// Crypto panel: refresh every 6s (sub-panels: top 1-12, top 13-24, stablecoins, btc-etf)
-	if cryptoPanelIndex >= 0 {
+	// Crypto panel: 4 sub-panels with individual timers. Top Cryptos: 30 coins, 10 per page (1-10, 11-20, 21-30), 16s per page, live countdown in title.
+	if cryptoPanelIndex >= 0 && cryptoSubpanelViews[0] != nil {
+		vTop := cryptoSubpanelViews[0]
+		vStable := cryptoSubpanelViews[1]
+		vNews := cryptoSubpanelViews[2]
+		vBtc := cryptoSubpanelViews[3]
+		// Top Cryptos: 3 pages (1-10, 11-20, 21-30), 16s per page, title shows live countdown e.g. "Top 11-20 by mcap (16s)"
 		go func() {
-			ci := cryptoPanelIndex
+			rangeStarts := []int{1, 11, 21}
+			pageIndex := 0
+			secondsLeft := 16
+			rangeLabel := func(start int) string {
+				end := start + 9
+				if end > 30 {
+					end = 30
+				}
+				return fmt.Sprintf("%d-%d", start, end)
+			}
+			refreshContent := func() {
+				start := rangeStarts[pageIndex]
+				c := renderCryptoTop(baseURL, start)
+				label := rangeLabel(start)
+				titleTop := fmt.Sprintf(" Top %s by mcap (%ds) ", label, secondsLeft)
+				app.QueueUpdateDraw(func() {
+					vTop.SetTitle(titleTop)
+					vTop.SetText(c)
+				})
+			}
+			refreshContent()
+			ticker := time.NewTicker(1 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				secondsLeft--
+				start := rangeStarts[pageIndex]
+				label := rangeLabel(start)
+				titleTop := fmt.Sprintf(" Top %s by mcap (%ds) ", label, secondsLeft)
+				app.QueueUpdateDraw(func() {
+					vTop.SetTitle(titleTop)
+				})
+				if secondsLeft <= 0 {
+					pageIndex = (pageIndex + 1) % 3
+					secondsLeft = 16
+					refreshContent()
+				}
+			}
+		}()
+		// Stablecoins: refresh every 6s
+		go func() {
 			ticker := time.NewTicker(6 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
-				content := panelContent(baseURL, "crypto")
-				func(c string) {
-					app.QueueUpdateDraw(func() {
-						textViews[ci].SetText(c)
-					})
-				}(content)
+				c := renderCryptoStablecoins(baseURL)
+				app.QueueUpdateDraw(func() { vStable.SetText(c) })
+			}
+		}()
+		// Crypto News: refresh every 6s
+		go func() {
+			ticker := time.NewTicker(6 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				c := renderCryptoNews(baseURL)
+				app.QueueUpdateDraw(func() { vNews.SetText(c) })
+			}
+		}()
+		// BTC ETF: refresh every 6s
+		go func() {
+			ticker := time.NewTicker(6 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				c := renderCryptoBtcEtf(baseURL)
+				app.QueueUpdateDraw(func() { vBtc.SetText(c) })
 			}
 		}()
 	}

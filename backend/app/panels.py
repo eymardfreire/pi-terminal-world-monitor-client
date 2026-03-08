@@ -1,7 +1,8 @@
 """
-Panel endpoints: World Clock, Weather (Open-Meteo), Global Situation Map.
+Panel endpoints: World Clock, Weather (Open-Meteo), Global Situation Map, Crypto.
 Uses cache-first for external calls; placeholders when upstream fails.
 """
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
@@ -19,6 +20,7 @@ router = APIRouter(prefix="/panels", tags=["panels"])
 _weather_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=128, ttl=600)  # 10 min
 _gsm_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=4, ttl=300)  # 5 min
 _crypto_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=8, ttl=90)  # 90s for crypto (CoinGecko rate limit)
+_crypto_news_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=4, ttl=300)  # 5 min for crypto news RSS
 
 # Top cities per continent for Weather Watch: continent -> [(name, lat, lon), ...]
 # Order defines cycle: North America → Central America → ... → Oceania → repeat
@@ -310,16 +312,20 @@ def _fetch_coingecko_markets(page: int = 1, per_page: int = 24, ids: str | None 
 
 @router.get("/crypto/top")
 def crypto_top(range_start: int = 1):
-    """Top cryptos by market cap. range_start=1 returns ranks 1-12, range_start=13 returns 13-24. Price, 24h%, 7d% (if available)."""
-    page = 1 if range_start <= 12 else 2
-    per_page = 12
+    """Top 30 cryptos by market cap, 10 per page. range_start=1 → 1-10, 11 → 11-20, 21 → 21-30. Price, 24h%, 7d% (if available)."""
+    # Normalize to one of 1, 11, 21
+    if range_start <= 10:
+        page, per_page = 1, 10
+    elif range_start <= 20:
+        page, per_page = 2, 10
+    else:
+        page, per_page = 3, 10
     raw = _fetch_coingecko_markets(page=page, per_page=per_page)
     coins = []
     for i, c in enumerate(raw):
         rank = (page - 1) * per_page + i + 1
         price = c.get("current_price")
         p24 = c.get("price_change_percentage_24h")
-        # 7d not in markets endpoint; use 24h for now or leave null
         p7d = c.get("price_change_percentage_7d_in_currency")
         coins.append({
             "rank": rank,
@@ -330,7 +336,8 @@ def crypto_top(range_start: int = 1):
             "price_24h_pct": round(p24, 2) if p24 is not None else None,
             "price_7d_pct": round(p7d, 2) if p7d is not None else None,
         })
-    return {"status": "ok", "source": "coingecko", "range": f"{range_start}-{range_start + len(coins) - 1}", "coins": coins}
+    end = (page - 1) * per_page + len(coins)
+    return {"status": "ok", "source": "coingecko", "range": f"{(page-1)*per_page + 1}-{end}", "coins": coins}
 
 
 @router.get("/crypto/stablecoins")
@@ -371,6 +378,60 @@ def crypto_stablecoins():
         "volume_b": round(total_vol / 1e9, 1),
         "coins": coins_out,
     }
+
+
+# Crypto news: public RSS (no API key); no trailing slash to avoid 308 redirect
+CRYPTO_NEWS_RSS_URL = "https://www.coindesk.com/arc/outboundfeeds/rss"
+CRYPTO_NEWS_MAX_ITEMS = 12
+
+
+def _fetch_crypto_news() -> dict[str, Any]:
+    cache_key = "crypto_news"
+    if cache_key in _crypto_news_cache:
+        return _crypto_news_cache[cache_key]
+    items: list[dict[str, Any]] = []
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.get(CRYPTO_NEWS_RSS_URL)
+            r.raise_for_status()
+            root = ET.fromstring(r.text)
+        # RSS 2.0: channel -> item; handle default ns
+        def text_of(el: ET.Element) -> str:
+            if el.text:
+                return (el.text or "").strip()
+            return "".join((el.itertext() or [])).strip()
+
+        for tag in root.iter():
+            if tag.tag.endswith("item"):
+                title = ""
+                link = ""
+                pub_date = ""
+                for child in tag:
+                    name = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                    if name == "title":
+                        title = text_of(child)
+                    elif name == "link":
+                        link = text_of(child)
+                    elif name == "pubDate":
+                        pub_date = text_of(child)
+                if title:
+                    items.append({"title": title[:120], "link": link, "pub_date": pub_date})
+                if len(items) >= CRYPTO_NEWS_MAX_ITEMS:
+                    break
+    except Exception:
+        pass
+    out = {"status": "ok", "source": "rss", "items": items}
+    _crypto_news_cache[cache_key] = out
+    return out
+
+
+@router.get("/crypto/news")
+def crypto_news():
+    """Crypto news from public RSS (e.g. CoinDesk). Cached 5 min."""
+    try:
+        return _fetch_crypto_news()
+    except Exception:
+        return {"status": "error", "source": "rss", "items": [], "message": "News temporarily unavailable."}
 
 
 @router.get("/crypto/btc-etf")
