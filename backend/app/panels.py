@@ -477,14 +477,40 @@ def crypto_news():
         return {"status": "error", "source": "rss", "items": [], "message": "News temporarily unavailable."}
 
 
-@router.get("/crypto/btc-etf")
-def crypto_btc_etf():
-    """BTC ETF Tracker: placeholder for World Monitor–style stats (flows, AUM, etc.). Next agent: wire real source."""
+# BTC ETF Tracker: stub data matching World Monitor layout (Net Flow, Est. Flow, Total Vol, ETFs; table TICKER, ISSUER, EST. FLOW, VOLUME, CHANGE)
+# Wire a real source (e.g. Farside/Blockworks) when available; replace _btc_etf_stub().
+BTC_ETF_STUB: list[dict[str, Any]] = [
+    {"ticker": "IBIT", "issuer": "BlackRock", "est_flow_m": -220.2, "volume_m": 57.0, "change_pct": -4.43},
+    {"ticker": "FBTC", "issuer": "Fidelity", "est_flow_m": -34.1, "volume_m": 5.8, "change_pct": -4.42},
+    {"ticker": "ARKB", "issuer": "ARK/21Shares", "est_flow_m": -9.8, "volume_m": 4.3, "change_pct": -4.40},
+    {"ticker": "BITB", "issuer": "Bitwise", "est_flow_m": -11.3, "volume_m": 3.1, "change_pct": -4.44},
+    {"ticker": "GBTC", "issuer": "Grayscale", "est_flow_m": -12.4, "volume_m": 2.3, "change_pct": -4.45},
+    {"ticker": "HODL", "issuer": "VanEck", "est_flow_m": -3.3, "volume_m": 1.7, "change_pct": -4.37},
+    {"ticker": "BRRR", "issuer": "Valkyrie", "est_flow_m": -0.364, "volume_m": 0.189, "change_pct": -4.43},
+    {"ticker": "EZBC", "issuer": "Franklin", "est_flow_m": -0.529, "volume_m": 0.134, "change_pct": -4.49},
+    {"ticker": "BTCO", "issuer": "Invesco", "est_flow_m": -0.391, "volume_m": 0.058, "change_pct": -4.47},
+    {"ticker": "BTCW", "issuer": "WisdomTree", "est_flow_m": -0.176, "volume_m": 0.024, "change_pct": -4.39},
+]
+
+
+def _btc_etf_stub() -> dict[str, Any]:
+    est_total = sum(e["est_flow_m"] for e in BTC_ETF_STUB)
+    total_vol = sum(e["volume_m"] for e in BTC_ETF_STUB)
+    etfs_down = sum(1 for e in BTC_ETF_STUB if (e.get("change_pct") or 0) < 0)
+    etfs_up = len(BTC_ETF_STUB) - etfs_down
     return {
         "status": "ok",
         "source": "stub",
-        "message": "BTC ETF data TBD – see docs/HANDOFF-PROGRESS.md",
-        "etfs": [],
-        "total_flows_24h": None,
-        "total_aum": None,
+        "net_flow_label": "NET OUTFLOW" if est_total < 0 else "NET INFLOW",
+        "est_flow_m": round(abs(est_total), 1),
+        "total_vol_m": round(total_vol, 1),
+        "etfs_up": etfs_up,
+        "etfs_down": etfs_down,
+        "etfs": BTC_ETF_STUB,
     }
+
+
+@router.get("/crypto/btc-etf")
+def crypto_btc_etf():
+    """BTC ETF Tracker: header (Net Flow, Est. Flow, Total Vol, ETFs) + list of ETFs. Stub data; wire real source when available."""
+    return _btc_etf_stub()

@@ -111,18 +111,24 @@ type cryptoStablecoinsResp struct {
 	Coins       []cryptoStablecoin  `json:"coins"`
 }
 
+// BTC ETF Tracker: header (Net Flow, Est. Flow, Total Vol, ETFs) + table rows
 type cryptoBtcEtfEntry struct {
-	Name     string  `json:"name"`
-	Flows24h float64 `json:"flows_24h"`
-	Aum      float64 `json:"aum"`
+	Ticker     string  `json:"ticker"`
+	Issuer     string  `json:"issuer"`
+	EstFlowM   float64 `json:"est_flow_m"`
+	VolumeM    float64 `json:"volume_m"`
+	ChangePct  float64 `json:"change_pct"`
 }
 
 type cryptoBtcEtfResp struct {
-	Status        string              `json:"status"`
-	Message       string              `json:"message"`
-	Etfs          []cryptoBtcEtfEntry `json:"etfs"`
-	TotalFlows24h interface{}         `json:"total_flows_24h"`
-	TotalAum      interface{}         `json:"total_aum"`
+	Status       string              `json:"status"`
+	Source       string              `json:"source"`
+	NetFlowLabel string              `json:"net_flow_label"`
+	EstFlowM     float64             `json:"est_flow_m"`
+	TotalVolM    float64             `json:"total_vol_m"`
+	EtfsUp       int                  `json:"etfs_up"`
+	EtfsDown     int                  `json:"etfs_down"`
+	Etfs         []cryptoBtcEtfEntry `json:"etfs"`
 }
 
 type cryptoNewsItem struct {
@@ -387,36 +393,65 @@ func renderCryptoStablecoins(baseURL string) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-func renderCryptoBtcEtf(baseURL string) string {
+// formatBtcEtfFlow formats est flow for display: -$220.2M or -$364K
+func formatBtcEtfFlow(m float64) string {
+	abs := m
+	if abs < 0 {
+		abs = -abs
+	}
+	if abs >= 1 {
+		return fmt.Sprintf("-$%.1fM", abs)
+	}
+	return fmt.Sprintf("-$%.0fK", abs*1000)
+}
+
+// formatBtcEtfVol formats volume for display: 57.0M or 189K
+func formatBtcEtfVol(m float64) string {
+	if m >= 1 {
+		return fmt.Sprintf("%.1fM", m)
+	}
+	return fmt.Sprintf("%.0fK", m*1000)
+}
+
+// renderCryptoBtcEtfPage renders one page (0 or 1) of the BTC ETF Tracker: header + 5 ETFs per page.
+func renderCryptoBtcEtfPage(baseURL string, page int) string {
 	var d cryptoBtcEtfResp
 	if err := fetchJSON(baseURL, "/panels/crypto/btc-etf", &d); err != nil {
 		return "No data"
 	}
-	if len(d.Etfs) > 0 || d.TotalFlows24h != nil || d.TotalAum != nil {
-		var b strings.Builder
-		if d.TotalFlows24h != nil {
-			if f, ok := d.TotalFlows24h.(float64); ok {
-				tag := "[green]"
-				if f < 0 {
-					tag = "[red]"
-				}
-				b.WriteString(fmt.Sprintf("  Flows 24h: %s%+.0f[-] M\n", tag, f))
-			}
-		}
-		if d.TotalAum != nil {
-			if a, ok := d.TotalAum.(float64); ok {
-				b.WriteString(fmt.Sprintf("  Total AUM: %.1f B\n", a))
-			}
-		}
-		for _, e := range d.Etfs {
-			b.WriteString(fmt.Sprintf("  %s flows %+.0f AUM %.1f B\n", e.Name, e.Flows24h, e.Aum))
-		}
-		return strings.TrimSuffix(b.String(), "\n")
+	if d.Status != "ok" {
+		return "No data"
 	}
-	if d.Message != "" {
-		return d.Message
+	var b strings.Builder
+	// Header row: Net Flow | Est. Flow | Total Vol | ETFs (same layout as screenshot)
+	netTag := "[red]"
+	if d.NetFlowLabel == "NET INFLOW" {
+		netTag = "[green]"
 	}
-	return "BTC ETF data TBD"
+	b.WriteString(fmt.Sprintf(" %s%s[-]  Est. Flow [white]$%.1fM[-]  Total Vol [white]%.1fM[-]  ETFs [white]%d↑ %d↓[-]\n",
+		netTag, d.NetFlowLabel, d.EstFlowM, d.TotalVolM, d.EtfsUp, d.EtfsDown))
+	b.WriteString(" [gray]TICKER    ISSUER         EST. FLOW   VOLUME   CHANGE[-]\n")
+	start := page * 5
+	end := start + 5
+	if end > len(d.Etfs) {
+		end = len(d.Etfs)
+	}
+	for i := start; i < end; i++ {
+		e := d.Etfs[i]
+		flowStr := formatBtcEtfFlow(e.EstFlowM)
+		volStr := formatBtcEtfVol(e.VolumeM)
+		chTag := "[red]"
+		if e.ChangePct >= 0 {
+			chTag = "[green]"
+		}
+		b.WriteString(fmt.Sprintf(" [white]%-6s[-] %-14s %s%-10s[-] %6s %s%+.2f%%[-]\n",
+			e.Ticker, e.Issuer, "[red]", flowStr, volStr, chTag, e.ChangePct))
+	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+func renderCryptoBtcEtf(baseURL string) string {
+	return renderCryptoBtcEtfPage(baseURL, 0)
 }
 
 func renderCryptoNews(baseURL string) string {
@@ -581,8 +616,8 @@ func main() {
 			tvStable.SetBorder(true).SetTitle(" Stablecoins ")
 			tvNews := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoNews(baseURL))
 			tvNews.SetBorder(true).SetTitle(" Crypto News ")
-			tvBtc := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoBtcEtf(baseURL))
-			tvBtc.SetBorder(true).SetTitle(" BTC ETF Tracker ")
+			tvBtc := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoBtcEtfPage(baseURL, 0))
+			tvBtc.SetBorder(true).SetTitle(" BTC ETF Tracker (16s) ")
 			cryptoSubpanelViews[0], cryptoSubpanelViews[1], cryptoSubpanelViews[2], cryptoSubpanelViews[3] = tvTop, tvStable, tvNews, tvBtc
 			topRow := tview.NewFlex().SetDirection(tview.FlexColumn).
 				AddItem(tvTop, 0, 1, false).
@@ -722,13 +757,33 @@ func main() {
 				app.QueueUpdateDraw(func() { vNews.SetText(c) })
 			}
 		}()
-		// BTC ETF: refresh every 6s
+		// BTC ETF Tracker: 2 pages (5 ETFs each), 16s per page, live countdown in title
 		go func() {
-			ticker := time.NewTicker(6 * time.Second)
+			pageIndex := 0
+			secondsLeft := 16
+			refreshBtc := func() {
+				c := renderCryptoBtcEtfPage(baseURL, pageIndex)
+				title := fmt.Sprintf(" BTC ETF Tracker (%ds) ", secondsLeft)
+				app.QueueUpdateDraw(func() {
+					vBtc.SetTitle(title)
+					vBtc.SetText(c)
+				})
+			}
+			refreshBtc()
+			ticker := time.NewTicker(1 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
-				c := renderCryptoBtcEtf(baseURL)
-				app.QueueUpdateDraw(func() { vBtc.SetText(c) })
+				secondsLeft--
+				if secondsLeft <= 0 {
+					pageIndex = (pageIndex + 1) % 2
+					secondsLeft = 16
+					refreshBtc()
+					continue
+				}
+				title := fmt.Sprintf(" BTC ETF Tracker (%ds) ", secondsLeft)
+				app.QueueUpdateDraw(func() {
+					vBtc.SetTitle(title)
+				})
 			}
 		}()
 	}
