@@ -2,6 +2,7 @@
 Panel endpoints: World Clock, Weather (Open-Meteo), Global Situation Map, Crypto.
 Uses cache-first for external calls; placeholders when upstream fails.
 """
+import re
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -434,11 +435,12 @@ def _fetch_crypto_news() -> dict[str, Any]:
             r = client.get(CRYPTO_NEWS_RSS_URL)
             r.raise_for_status()
             root = ET.fromstring(r.text)
-        # RSS 2.0: channel -> item; handle default ns
+        # RSS 2.0: channel -> item; handle default ns; use itertext() so CDATA is included
         def text_of(el: ET.Element) -> str:
-            if el.text:
-                return (el.text or "").strip()
-            return "".join((el.itertext() or [])).strip()
+            parts = list(el.itertext()) if el.itertext() else []
+            if parts:
+                return "".join(parts).strip()
+            return (el.text or "").strip()
 
         for tag in root.iter():
             if tag.tag.endswith("item"):
@@ -456,12 +458,20 @@ def _fetch_crypto_news() -> dict[str, Any]:
                         pub_date = text_of(child)
                     elif name == "description":
                         description = text_of(child)
+                    elif name == "encoded":
+                        # content:encoded often has full/summary text; use if description empty
+                        if not description:
+                            description = text_of(child)
                 if title:
+                    # Strip HTML tags from description for plain-text display
+                    if description and "<" in description:
+                        description = re.sub(r"<[^>]+>", " ", description)
+                        description = " ".join(description.split())
                     items.append({
                         "title": title[:120],
                         "link": link,
                         "pub_date": pub_date,
-                        "description": description[:500] if description else "",
+                        "description": (description[:800] if description else "").strip(),
                     })
                 if len(items) >= CRYPTO_NEWS_MAX_ITEMS:
                     break
