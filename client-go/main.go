@@ -318,14 +318,19 @@ func pctColor(pct *float64) string {
 	return "[red]"
 }
 
-func renderCryptoTop(baseURL string, rangeStart int) string {
+// renderCryptoTopWithRange fetches and renders the top-cryptos panel; returns content and the range label from the API (e.g. "1-11") for the title.
+func renderCryptoTopWithRange(baseURL string, rangeStart int) (content string, rangeLabel string) {
+	rangeLabel = fmt.Sprintf("%d-%d", rangeStart, rangeStart+10) // fallback e.g. 1-11, 12-22, 23-33
 	var d cryptoTopResp
 	path := fmt.Sprintf("/panels/crypto/top?range_start=%d", rangeStart)
 	if err := fetchJSON(baseURL, path, &d); err != nil {
-		return "No data"
+		return "No data", rangeLabel
 	}
 	if d.Status != "ok" || len(d.Coins) == 0 {
-		return "No data"
+		return "No data", rangeLabel
+	}
+	if d.Range != "" {
+		rangeLabel = d.Range
 	}
 	var b strings.Builder
 	for _, c := range d.Coins {
@@ -346,7 +351,12 @@ func renderCryptoTop(baseURL string, rangeStart int) string {
 		tag7d := pctColor(c.Price7dPct)
 		b.WriteString(fmt.Sprintf("  %2d %s %s 1h %s%s[-] 24h %s%s[-] 7d %s%s[-]\n", c.Rank, c.Symbol, fmtPrice(c.Price), tag1h, p1h, tag24, p24, tag7d, p7d))
 	}
-	return strings.TrimSuffix(b.String(), "\n")
+	return strings.TrimSuffix(b.String(), "\n"), rangeLabel
+}
+
+func renderCryptoTop(baseURL string, rangeStart int) string {
+	content, _ := renderCryptoTopWithRange(baseURL, rangeStart)
+	return content
 }
 
 func renderCryptoStablecoins(baseURL string) string {
@@ -655,25 +665,22 @@ func main() {
 		}()
 	}
 
-	// Crypto panel: 4 sub-panels with individual timers. Top Cryptos: 30 coins, 10 per page (1-10, 11-20, 21-30), 16s per page, live countdown in title.
+	// Crypto panel: 4 sub-panels with individual timers. Top Cryptos: 33 coins, 11 per page (1-11, 12-22, 23-33), 16s per page, title from API.
 	if cryptoPanelIndex >= 0 && cryptoSubpanelViews[0] != nil {
 		vTop := cryptoSubpanelViews[0]
 		vStable := cryptoSubpanelViews[1]
 		vNews := cryptoSubpanelViews[2]
 		vBtc := cryptoSubpanelViews[3]
-		// Top Cryptos: 3 panels, 11 per page (1-11, 12-22, 23-33), 16s per page, title shows live countdown e.g. "Top 12-22 by mcap (16s)"
+		// Top Cryptos: 3 panels, 11 per page (1-11, 12-22, 23-33), 16s per page; title uses range from API so it matches content
 		go func() {
 			rangeStarts := []int{1, 12, 23}
 			pageIndex := 0
 			secondsLeft := 16
-			rangeLabel := func(start int) string {
-				end := start + 10 // 11 items per page
-				return fmt.Sprintf("%d-%d", start, end)
-			}
+			currentRangeLabel := "1-11"
 			refreshContent := func() {
 				start := rangeStarts[pageIndex]
-				c := renderCryptoTop(baseURL, start)
-				label := rangeLabel(start)
+				c, label := renderCryptoTopWithRange(baseURL, start)
+				currentRangeLabel = label
 				titleTop := fmt.Sprintf(" Top %s by mcap (%ds) ", label, secondsLeft)
 				app.QueueUpdateDraw(func() {
 					vTop.SetTitle(titleTop)
@@ -691,9 +698,7 @@ func main() {
 					refreshContent()
 					continue
 				}
-				start := rangeStarts[pageIndex]
-				label := rangeLabel(start)
-				titleTop := fmt.Sprintf(" Top %s by mcap (%ds) ", label, secondsLeft)
+				titleTop := fmt.Sprintf(" Top %s by mcap (%ds) ", currentRangeLabel, secondsLeft)
 				app.QueueUpdateDraw(func() {
 					vTop.SetTitle(titleTop)
 				})
