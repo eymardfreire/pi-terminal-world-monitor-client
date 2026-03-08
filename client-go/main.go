@@ -154,7 +154,7 @@ func weatherIcon(code int) string {
 	}
 }
 
-// tempColor returns tview color tag for heat map: cold=blue, hot=red, mild=green.
+// tempColor returns tview color tag for heat map: cold→blue/cyan, mild→green, warm→yellow, hot→red.
 func tempColor(tempStr string) string {
 	if tempStr == "" || tempStr == "—" {
 		return "[gray]"
@@ -163,13 +163,18 @@ func tempColor(tempStr string) string {
 	if err != nil {
 		return "[white]"
 	}
-	if n <= 10 {
+	switch {
+	case n < 10:
 		return "[blue]"
-	}
-	if n >= 28 {
+	case n < 18:
+		return "[cyan]"
+	case n < 25:
+		return "[green]"
+	case n < 30:
+		return "[yellow]"
+	default:
 		return "[red]"
 	}
-	return "[green]"
 }
 
 func renderWeather(baseURL string) string {

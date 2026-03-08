@@ -16,52 +16,69 @@ _weather_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=128, ttl=600)  
 _gsm_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=4, ttl=300)  # 5 min
 
 # Top cities per continent for Weather Watch: continent -> [(name, lat, lon), ...]
+# Order defines cycle: North America → Central America → ... → Oceania → repeat
 WEATHER_BY_CONTINENT: dict[str, list[tuple[str, float, float]]] = {
     "North America": [
         ("New York", 40.7128, -74.0060),
         ("Los Angeles", 34.0522, -118.2437),
         ("Chicago", 41.8781, -87.6298),
         ("Toronto", 43.6532, -79.3832),
+        ("Miami", 25.7617, -80.1918),
+        ("Vancouver", 49.2827, -123.1207),
     ],
     "Central America": [
         ("Mexico City", 19.4326, -99.1332),
         ("Guatemala City", 14.6349, -90.5069),
         ("Havana", 23.1136, -82.3666),
+        ("San José", 9.9281, -84.0907),
+        ("Panama City", 8.9824, -79.5199),
     ],
     "South America": [
         ("São Paulo", -23.5505, -46.6333),
         ("Buenos Aires", -34.6037, -58.3816),
         ("Lima", -12.0464, -77.0428),
         ("Bogotá", 4.7110, -74.0721),
+        ("Santiago", -33.4489, -70.6693),
+        ("Caracas", 10.4806, -66.9036),
     ],
     "Europe": [
         ("London", 51.5074, -0.1278),
         ("Berlin", 52.5200, 13.4050),
         ("Paris", 48.8566, 2.3522),
         ("Madrid", 40.4168, -3.7038),
+        ("Rome", 41.9028, 12.4964),
+        ("Amsterdam", 52.3676, 4.9041),
     ],
     "Africa": [
         ("Cairo", 30.0444, 31.2357),
         ("Lagos", 6.5244, 3.3792),
         ("Johannesburg", -26.2041, 28.0473),
         ("Nairobi", -1.2921, 36.8219),
+        ("Casablanca", 33.5731, -7.5898),
+        ("Accra", 5.6037, -0.1870),
     ],
     "Middle East": [
         ("Dubai", 25.2048, 55.2708),
         ("Tel Aviv", 32.0853, 34.7818),
         ("Riyadh", 24.7136, 46.6753),
         ("Istanbul", 41.0082, 28.9784),
+        ("Tehran", 35.6892, 51.3890),
+        ("Doha", 25.2854, 51.5310),
     ],
     "Asia": [
         ("Tokyo", 35.6762, 139.6503),
         ("Beijing", 39.9042, 116.4074),
         ("Mumbai", 19.0760, 72.8777),
         ("Singapore", 1.3521, 103.8198),
+        ("Seoul", 37.5665, 126.9780),
+        ("Bangkok", 13.7563, 100.5018),
     ],
     "Oceania": [
         ("Sydney", -33.8688, 151.2093),
         ("Melbourne", -37.8136, 144.9631),
         ("Auckland", -36.8509, 174.7645),
+        ("Brisbane", -27.4698, 153.0251),
+        ("Perth", -31.9505, 115.8605),
     ],
 }
 
