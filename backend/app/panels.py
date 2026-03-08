@@ -311,12 +311,12 @@ def _fetch_coingecko_markets(
             data = r.json()
         return data if isinstance(data, list) else []
 
-    for attempt in range(2):  # retry once on failure (helps page 3 rate limits/timeouts)
+    for attempt in range(2):
         if attempt == 1:
-            time.sleep(1)  # brief pause before retry to avoid hammering API
+            time.sleep(1)
         try:
             data = _do_fetch()
-            if data:  # only cache non-empty so we retry when CoinGecko returns empty/rate-limit
+            if data:
                 _crypto_cache[cache_key] = data
             return data
         except Exception:
@@ -326,20 +326,45 @@ def _fetch_coingecko_markets(
     return []
 
 
+# Single fetch of top 33 so all three panels (1-11, 12-22, 23-33) share one API call and avoid rate limits
+_TOP33_CACHE_KEY = "top33_1h_24h_7d"
+
+
+def _fetch_top33_coins() -> list[dict[str, Any]]:
+    if _TOP33_CACHE_KEY in _crypto_cache:
+        return _crypto_cache[_TOP33_CACHE_KEY]
+    for attempt in range(2):
+        if attempt == 1:
+            time.sleep(1)
+        try:
+            raw = _fetch_coingecko_markets(page=1, per_page=33, price_change="1h,24h,7d")
+            if raw:
+                _crypto_cache[_TOP33_CACHE_KEY] = raw
+                return raw
+        except Exception:
+            if attempt == 0:
+                continue
+            return []
+    return []
+
+
 @router.get("/crypto/top")
 def crypto_top(range_start: int = 1):
-    """Top 33 cryptos by market cap, 11 per page. range_start=1 → 1-11, 12 → 12-22, 23 → 23-33. Price, 1h%, 24h%, 7d%."""
-    # Normalize to one of 1, 12, 23 (11 per page, 3 panels)
+    """Top 33 cryptos by market cap, 11 per page. Single API call for all 33; slice by range_start to avoid rate limits."""
+    # One request for 33 coins; slice into 1-11, 12-22, 23-33
+    raw = _fetch_top33_coins()
+    if not raw:
+        return {"status": "ok", "source": "coingecko", "range": "1-11", "coins": []}
     if range_start <= 11:
-        page, per_page = 1, 11
+        start_idx, end_idx = 0, 11
     elif range_start <= 22:
-        page, per_page = 2, 11
+        start_idx, end_idx = 11, 22
     else:
-        page, per_page = 3, 11
-    raw = _fetch_coingecko_markets(page=page, per_page=per_page)
+        start_idx, end_idx = 22, 33
+    slice_raw = raw[start_idx:end_idx]
     coins = []
-    for i, c in enumerate(raw):
-        rank = (page - 1) * per_page + i + 1
+    for i, c in enumerate(slice_raw):
+        rank = start_idx + i + 1
         price = c.get("current_price")
         p1h = c.get("price_change_percentage_1h_in_currency") or c.get("price_change_percentage_1h")
         p24 = c.get("price_change_percentage_24h")
@@ -354,8 +379,8 @@ def crypto_top(range_start: int = 1):
             "price_24h_pct": round(p24, 2) if p24 is not None else None,
             "price_7d_pct": round(p7d, 2) if p7d is not None else None,
         })
-    end = (page - 1) * per_page + len(coins)
-    return {"status": "ok", "source": "coingecko", "range": f"{(page-1)*per_page + 1}-{end}", "coins": coins}
+    end = start_idx + len(coins)
+    return {"status": "ok", "source": "coingecko", "range": f"{start_idx + 1}-{end}", "coins": coins}
 
 
 @router.get("/crypto/stablecoins")
