@@ -6,6 +6,8 @@ Runs on VPS; serves pre-aggregated panel data to the terminal client.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.panels import router as panels_router
+
 app = FastAPI(
     title="Pi Terminal World Monitor API",
     description="Backend for the Pi terminal dashboard; panel data only.",
@@ -19,6 +21,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(panels_router)
 
 
 @app.get("/health")
