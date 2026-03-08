@@ -2,6 +2,7 @@
 Panel endpoints: World Clock, Weather (Open-Meteo), Global Situation Map, Crypto.
 Uses cache-first for external calls; placeholders when upstream fails.
 """
+import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -293,7 +294,8 @@ def _fetch_coingecko_markets(
     cache_key = f"markets_p{page}_n{per_page}_{ids or 'all'}_{price_change}"
     if cache_key in _crypto_cache:
         return _crypto_cache[cache_key]
-    try:
+
+    def _do_fetch() -> list[dict[str, Any]]:
         params: dict[str, Any] = {
             "vs_currency": "usd",
             "order": "market_cap_desc",
@@ -307,10 +309,21 @@ def _fetch_coingecko_markets(
             r = client.get(f"{COINGECKO_BASE}/coins/markets", params=params)
             r.raise_for_status()
             data = r.json()
-        _crypto_cache[cache_key] = data
-        return data
-    except Exception:
-        return []
+        return data if isinstance(data, list) else []
+
+    for attempt in range(2):  # retry once on failure (helps page 3 rate limits/timeouts)
+        if attempt == 1:
+            time.sleep(1)  # brief pause before retry to avoid hammering API
+        try:
+            data = _do_fetch()
+            if data:  # only cache non-empty so we retry when CoinGecko returns empty/rate-limit
+                _crypto_cache[cache_key] = data
+            return data
+        except Exception:
+            if attempt == 0:
+                continue
+            return []
+    return []
 
 
 @router.get("/crypto/top")

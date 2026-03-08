@@ -95,6 +95,35 @@ cd /opt/pi-terminal-world-monitor-client && git pull && cd backend && .venv/bin/
 
 If uvicorn is already running in the foreground, stop it with **Ctrl+C**, then run the line above again.
 
+If you get **"address already in use" (Errno 98)** on port 8000, another process is using it. Stop it first, then start uvicorn:
+
+```bash
+# Find what is using port 8000 (try both; use root if needed)
+sudo lsof -i :8000
+# Or: sudo ss -tlnp | grep 8000
+# Or: sudo fuser -v 8000/tcp
+
+# Kill that process (use the PID; -9 forces if normal kill doesn't work)
+sudo kill -9 <PID>
+
+# Wait a second for the port to release, then start the backend
+sleep 2
+cd /opt/pi-terminal-world-monitor-client && git pull && cd backend && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+If **systemd** is managing the backend, it may be restarting the process. Then use:
+
+```bash
+sudo systemctl stop pi-world-monitor   # or your service name
+# or: sudo systemctl restart pi-world-monitor
+```
+
+One-liner (force kill, wait, then start):
+
+```bash
+sudo kill -9 $(sudo lsof -t -i :8000) 2>/dev/null; sleep 2; cd /opt/pi-terminal-world-monitor-client && git pull && cd backend && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
 If the backend runs under systemd, restart the service instead:
 
 ```bash
