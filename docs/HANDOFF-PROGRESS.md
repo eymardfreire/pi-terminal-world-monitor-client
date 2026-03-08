@@ -13,14 +13,14 @@ Use this document to continue development with a new agent or session. It summar
   - OpenSpec change in `openspec/changes/add-pi-terminal-world-monitor-client/`; `tasks.md` updated with completed items.
 
 - **Backend (VPS)**
-  - FastAPI app: `GET /health`, `GET /panels`, `GET /panels/world-clock`, `GET /panels/weather`, `GET /panels/global-situation-map`.
-  - World Clock: server UTC and zones. Weather: **Open-Meteo** by continent (North America, Central/South America, Europe, Africa, Middle East, Asia, Oceania) with top cities each; current temp + daily high/low; 10 min cache. Global Situation Map: regions with severity + event types (stub data; pipeline ready for real feeds).
+  - FastAPI app: `GET /health`, `GET /panels`, `GET /panels/world-clock`, `GET /panels/weather`, `GET /panels/global-situation-map`, **`GET /panels/crypto/top`**, **`GET /panels/crypto/stablecoins`**, **`GET /panels/crypto/btc-etf`**.
+  - Panel list puts **crypto first** (top-left slot). World Clock, Weather (Open-Meteo by continent), Global Situation Map. **Crypto**: CoinGecko free API for top 1–12 / 13–24 (price, 24h%), stablecoins (status, mcap, volume, ON PEG); BTC ETF endpoint is a **stub** (see below).
   - Deployed on DigitalOcean droplet **209.38.141.129** (Ubuntu 24.10). Run: `cd /opt/pi-terminal-world-monitor-client/backend && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000`. After code changes on GitHub: `git pull` on droplet then restart uvicorn.
 
 - **Go client (recommended)**
   - `client-go/`: Go 1.21 + [tview](https://github.com/rivo/tview). Build: `go mod tidy && go build -o pi-world-monitor-client .`
   - Env: `BACKEND_URL`, `CYCLE_SECONDS` (default 8), `GRID_COLS` / `GRID_ROWS` (default 2×2; use e.g. 3×3 for more, smaller panels). Press **Q** to quit.
-  - Weather Watch: one continent per refresh (cycles through all); current temp + low/high; **heat map** (blue ≤10°C, green 11–27°C, red ≥28°C); **weather icons** (☀☁🌧❄⛈ etc.). Global Situation Map: severity color-coded. Refreshes every N seconds.
+  - **Crypto** (top-left): 3 sub-panels cycling every 6s – (1) Top 12 cryptos by mcap, (2) Top 13–24, (3) Stablecoins (status, mcap, volume, peg health), (4) BTC ETF Tracker (stub message). Price change green/red. Weather Watch: continent cycling, heat map, icons. Global Situation Map: severity color-coded. All use **QueueUpdateDraw** so panels refresh without keypress.
 
 - **Python client**
   - `client/`: Python + blessed. Multi-panel grid; use if Go isn’t available. Run: `python -m client` from `client/` with venv and `BACKEND_URL` set.
@@ -32,9 +32,9 @@ Use this document to continue development with a new agent or session. It summar
 
 ### Not done (see Next steps)
 
-- Remaining panel categories (strategic risk, intel, news, markets, crypto, etc.); Global Situation Map currently uses stub data (pipeline ready for real conflict/news feeds).
-- Formal API schemas (OpenAPI) and cache-first/backoff for all external fetchers.
-- Pi 3B validation (run Go client on device, check CPU/memory).
+- **BTC ETF Tracker** – backend and client stub in place; needs real data source (see Crypto + BTC ETF section below).
+- Terminal **sparklines/graphs** for crypto (e.g. ASCII/Unicode mini-charts) – not yet implemented.
+- Remaining panel categories; Global Situation Map stub; formal OpenAPI; Pi 3B validation.
 
 ---
 
@@ -91,6 +91,29 @@ curl -s http://209.38.141.129:8000/panels/world-clock
 
 6. **OpenSpec**  
    As you complete items, mark them `[x]` in `openspec/changes/add-pi-terminal-world-monitor-client/tasks.md`. When the change is feature-complete, use `/opsx:archive` (or the project’s OpenSpec workflow) to archive the change and update main specs.
+
+---
+
+## Crypto panel and BTC ETF (for next agent)
+
+The **Crypto** panel occupies the **top-left** slot and cycles through four sub-views every 6 seconds:
+
+1. **Top cryptos 1–12** – `GET /panels/crypto/top?range_start=1` (CoinGecko). Shows rank, symbol, price, 24h% (green/red), 7d% when available.
+2. **Top cryptos 13–24** – `GET /panels/crypto/top?range_start=13`.
+3. **Stablecoins** – `GET /panels/crypto/stablecoins`. Status (Healthy/Caution), market cap, volume, per-coin PEG HEALTH (ON PEG / OFF PEG + deviation %).
+4. **BTC ETF Tracker** – `GET /panels/crypto/btc-etf`. **Currently a stub.** Backend returns `status`, `message`, empty `etfs`, null `total_flows_24h`, `total_aum`.
+
+### What to implement for BTC ETF Tracker (World Monitor parity)
+
+- **Backend** (`backend/app/panels.py`): Replace the stub in `crypto_btc_etf()` with a real data pipeline. World Monitor ([github.com/koala73/worldmonitor](https://github.com/koala73/worldmonitor)) pulls BTC ETF stats – flows (in/out), AUM, per-ETF breakdown. Use a **free** source and cache with TTL. Expose: list of ETFs with name, flows 24h, AUM; aggregates (total flows 24h, total AUM).
+- **Client** (`client-go/main.go`): In `renderCryptoBtcEtf()`, parse the real response and render total flows (green/red by sign), total AUM, and per-ETF table. Keep 6s cycle.
+- **Terminal graphs for crypto**: For top-cryptos sub-panels, consider ASCII/Unicode sparklines (e.g. `▁▂▃▄▅▆▇█`). CoinGecko `market_chart` can provide history; backend could return a short series; client renders one-line sparkline per coin.
+
+### Backend response shapes (reference)
+
+- **`/panels/crypto/top`**: `{ "status", "range", "coins": [ { "rank", "symbol", "name", "price", "price_24h_pct", "price_7d_pct" } ] }`
+- **`/panels/crypto/stablecoins`**: `{ "status", "status_label", "market_cap_b", "volume_b", "coins": [ { "symbol", "name", "price", "peg_status", "deviation_pct" } ] }`
+- **`/panels/crypto/btc-etf`** (target): `{ "status", "etfs": [ { "name", "flows_24h", "aum" } ], "total_flows_24h", "total_aum" }`
 
 ---
 

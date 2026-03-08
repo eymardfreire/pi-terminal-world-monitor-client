@@ -18,6 +18,7 @@ router = APIRouter(prefix="/panels", tags=["panels"])
 # In-memory cache for external APIs (TTL seconds, max entries)
 _weather_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=128, ttl=600)  # 10 min
 _gsm_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=4, ttl=300)  # 5 min
+_crypto_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=8, ttl=90)  # 90s for crypto (CoinGecko rate limit)
 
 # Top cities per continent for Weather Watch: continent -> [(name, lat, lon), ...]
 # Order defines cycle: North America → Central America → ... → Oceania → repeat
@@ -158,9 +159,9 @@ def _fetch_one_weather(lat: float, lon: float) -> dict[str, Any] | None:
 
 @router.get("")
 def list_panels():
-    """Panel keys the client can request. Used for discovery and cycling."""
+    """Panel keys the client can request. First slot = Crypto (top-left), then Weather, GSM, World Clock."""
     return {
-        "panels": ["world-clock", "weather", "global-situation-map"],
+        "panels": ["crypto", "weather", "global-situation-map", "world-clock"],
         "status": "ok",
     }
 
@@ -276,3 +277,110 @@ def global_situation_map():
             "regions": [],
             "message": "Data temporarily unavailable.",
         }
+
+
+# --- Crypto panel (CoinGecko free API; no key) ---
+
+COINGECKO_BASE = "https://api.coingecko.com/api/v3"
+STABLECOIN_IDS = "tether,usd-coin,binance-usd,dai,ethena-usde,frax,frax-share,tusd"
+
+
+def _fetch_coingecko_markets(page: int = 1, per_page: int = 24, ids: str | None = None) -> list[dict[str, Any]]:
+    cache_key = f"markets_p{page}_n{per_page}_{ids or 'all'}"
+    if cache_key in _crypto_cache:
+        return _crypto_cache[cache_key]
+    try:
+        params: dict[str, Any] = {
+            "vs_currency": "usd",
+            "order": "market_cap_desc",
+            "per_page": per_page,
+            "page": page,
+        }
+        if ids:
+            params["ids"] = ids
+        with httpx.Client(timeout=10.0) as client:
+            r = client.get(f"{COINGECKO_BASE}/coins/markets", params=params)
+            r.raise_for_status()
+            data = r.json()
+        _crypto_cache[cache_key] = data
+        return data
+    except Exception:
+        return []
+
+
+@router.get("/crypto/top")
+def crypto_top(range_start: int = 1):
+    """Top cryptos by market cap. range_start=1 returns ranks 1-12, range_start=13 returns 13-24. Price, 24h%, 7d% (if available)."""
+    page = 1 if range_start <= 12 else 2
+    per_page = 12
+    raw = _fetch_coingecko_markets(page=page, per_page=per_page)
+    coins = []
+    for i, c in enumerate(raw):
+        rank = (page - 1) * per_page + i + 1
+        price = c.get("current_price")
+        p24 = c.get("price_change_percentage_24h")
+        # 7d not in markets endpoint; use 24h for now or leave null
+        p7d = c.get("price_change_percentage_7d_in_currency")
+        coins.append({
+            "rank": rank,
+            "id": c.get("id"),
+            "symbol": (c.get("symbol") or "").upper(),
+            "name": c.get("name", ""),
+            "price": round(price, 4) if price is not None else None,
+            "price_24h_pct": round(p24, 2) if p24 is not None else None,
+            "price_7d_pct": round(p7d, 2) if p7d is not None else None,
+        })
+    return {"status": "ok", "source": "coingecko", "range": f"{range_start}-{range_start + len(coins) - 1}", "coins": coins}
+
+
+@router.get("/crypto/stablecoins")
+def crypto_stablecoins():
+    """Stablecoins: status (healthy if all on peg), market cap, volume, per-coin peg health."""
+    raw = _fetch_coingecko_markets(per_page=20, ids=STABLECOIN_IDS)
+    if not raw:
+        return {
+            "status": "ok",
+            "source": "coingecko",
+            "status_label": "No data",
+            "market_cap_b": None,
+            "volume_b": None,
+            "coins": [],
+        }
+    total_mcap = sum(c.get("market_cap") or 0 for c in raw)
+    total_vol = sum(c.get("total_volume") or 0 for c in raw)
+    coins_out = []
+    all_on_peg = True
+    for c in raw:
+        price = c.get("current_price") or 0
+        dev = abs(price - 1.0) * 100
+        on_peg = dev <= 0.5
+        if not on_peg:
+            all_on_peg = False
+        coins_out.append({
+            "symbol": (c.get("symbol") or "").upper(),
+            "name": c.get("name", ""),
+            "price": round(price, 4),
+            "peg_status": "ON PEG" if on_peg else "OFF PEG",
+            "deviation_pct": round(dev, 2),
+        })
+    return {
+        "status": "ok",
+        "source": "coingecko",
+        "status_label": "Healthy" if all_on_peg else "Caution",
+        "market_cap_b": round(total_mcap / 1e9, 1),
+        "volume_b": round(total_vol / 1e9, 1),
+        "coins": coins_out,
+    }
+
+
+@router.get("/crypto/btc-etf")
+def crypto_btc_etf():
+    """BTC ETF Tracker: placeholder for World Monitor–style stats (flows, AUM, etc.). Next agent: wire real source."""
+    return {
+        "status": "ok",
+        "source": "stub",
+        "message": "BTC ETF data TBD – see docs/HANDOFF-PROGRESS.md",
+        "etfs": [],
+        "total_flows_24h": None,
+        "total_aum": None,
+    }
