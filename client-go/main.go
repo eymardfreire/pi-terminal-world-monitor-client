@@ -324,11 +324,17 @@ func pctColor(pct *float64) string {
 	return "[red]"
 }
 
-// renderCryptoTopWithRange fetches and renders the top-cryptos panel; returns content and the range label from the API (e.g. "1-11") for the title.
-func renderCryptoTopWithRange(baseURL string, rangeStart int) (content string, rangeLabel string) {
-	rangeLabel = fmt.Sprintf("%d-%d", rangeStart, rangeStart+10) // fallback e.g. 1-11, 12-22, 23-33
+// renderCryptoTopWithRange fetches and renders the top-cryptos panel; perPage sets lines per page (resolution-aware). Returns content and range label.
+func renderCryptoTopWithRange(baseURL string, rangeStart, perPage int) (content string, rangeLabel string) {
+	if perPage < 5 {
+		perPage = 5
+	}
+	if perPage > 25 {
+		perPage = 25
+	}
+	rangeLabel = fmt.Sprintf("%d-%d", rangeStart, rangeStart+perPage-1)
 	var d cryptoTopResp
-	path := fmt.Sprintf("/panels/crypto/top?range_start=%d", rangeStart)
+	path := fmt.Sprintf("/panels/crypto/top?range_start=%d&per_page=%d", rangeStart, perPage)
 	if err := fetchJSON(baseURL, path, &d); err != nil {
 		return "No data", rangeLabel
 	}
@@ -361,7 +367,7 @@ func renderCryptoTopWithRange(baseURL string, rangeStart int) (content string, r
 }
 
 func renderCryptoTop(baseURL string, rangeStart int) string {
-	content, _ := renderCryptoTopWithRange(baseURL, rangeStart)
+	content, _ := renderCryptoTopWithRange(baseURL, rangeStart, 11)
 	return content
 }
 
@@ -413,7 +419,16 @@ func formatBtcEtfVol(m float64) string {
 	return fmt.Sprintf("%.0fK", m*1000)
 }
 
-// renderCryptoBtcEtfPage renders one page (0 or 1) of the BTC ETF Tracker: header + 5 ETFs per page.
+// BTC ETF column widths for alignment (header and data use same positions)
+const (
+	btcColTicker = 6
+	btcColIssuer = 15
+	btcColFlow   = 11
+	btcColVol    = 8
+	btcColChange = 8
+)
+
+// renderCryptoBtcEtfPage renders one page (0 or 1) of the BTC ETF Tracker: header + 5 ETFs per page; fixed-width columns for alignment.
 func renderCryptoBtcEtfPage(baseURL string, page int) string {
 	var d cryptoBtcEtfResp
 	if err := fetchJSON(baseURL, "/panels/crypto/btc-etf", &d); err != nil {
@@ -423,14 +438,20 @@ func renderCryptoBtcEtfPage(baseURL string, page int) string {
 		return "No data"
 	}
 	var b strings.Builder
-	// Header row: Net Flow | Est. Flow | Total Vol | ETFs (same layout as screenshot)
 	netTag := "[red]"
 	if d.NetFlowLabel == "NET INFLOW" {
 		netTag = "[green]"
 	}
-	b.WriteString(fmt.Sprintf(" %s%s[-]  Est. Flow [white]$%.1fM[-]  Total Vol [white]%.1fM[-]  ETFs [white]%d↑ %d↓[-]\n",
-		netTag, d.NetFlowLabel, d.EstFlowM, d.TotalVolM, d.EtfsUp, d.EtfsDown))
-	b.WriteString(" [gray]TICKER    ISSUER         EST. FLOW   VOLUME   CHANGE[-]\n")
+	// Header row 1: first block spans TICKER+ISSUER so Est. Flow / Total Vol / ETFs align with columns below
+	firstColWidth := btcColTicker + 1 + btcColIssuer
+	b.WriteString(fmt.Sprintf(" %s%-*s[-] %*s %*s %*s\n",
+		netTag, firstColWidth, d.NetFlowLabel,
+		btcColFlow, fmt.Sprintf("$%.1fM", d.EstFlowM),
+		btcColVol, fmt.Sprintf("%.1fM", d.TotalVolM),
+		btcColChange, fmt.Sprintf("%d↑ %d↓", d.EtfsUp, d.EtfsDown)))
+	// Column headers: same widths as data
+	b.WriteString(fmt.Sprintf(" [gray]%-*s %-*s %*s %*s %*s[-]\n",
+		btcColTicker, "TICKER", btcColIssuer, "ISSUER", btcColFlow, "EST. FLOW", btcColVol, "VOLUME", btcColChange, "CHANGE"))
 	start := page * 5
 	end := start + 5
 	if end > len(d.Etfs) {
@@ -440,12 +461,15 @@ func renderCryptoBtcEtfPage(baseURL string, page int) string {
 		e := d.Etfs[i]
 		flowStr := formatBtcEtfFlow(e.EstFlowM)
 		volStr := formatBtcEtfVol(e.VolumeM)
+		chStr := fmt.Sprintf("%+.2f%%", e.ChangePct)
 		chTag := "[red]"
 		if e.ChangePct >= 0 {
 			chTag = "[green]"
 		}
-		b.WriteString(fmt.Sprintf(" [white]%-6s[-] %-14s %s%-10s[-] %6s %s%+.2f%%[-]\n",
-			e.Ticker, e.Issuer, "[red]", flowStr, volStr, chTag, e.ChangePct))
+		b.WriteString(fmt.Sprintf(" [white]%-*s[-] %-*s %s%*s[-] %*s %s%*s[-]\n",
+			btcColTicker, e.Ticker, btcColIssuer, e.Issuer,
+			"[red]", btcColFlow, flowStr, btcColVol, volStr,
+			chTag, btcColChange, chStr))
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
@@ -611,7 +635,7 @@ func main() {
 		if key == "crypto" {
 			// Crypto: 4 bordered sub-panels in 2×2 (Top Cryptos | Stable Coins; Crypto News | BTC ETF)
 			tvTop := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoTop(baseURL, 1))
-			tvTop.SetBorder(true).SetTitle(" Top 1-11 by mcap (16s) ")
+			tvTop.SetBorder(true).SetTitle(" Top cryptos by mcap (8s) ")
 			tvStable := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoStablecoins(baseURL))
 			tvStable.SetBorder(true).SetTitle(" Stablecoins ")
 			tvNews := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoNews(baseURL))
@@ -706,17 +730,41 @@ func main() {
 		vStable := cryptoSubpanelViews[1]
 		vNews := cryptoSubpanelViews[2]
 		vBtc := cryptoSubpanelViews[3]
-		// Top Cryptos: 3 panels, 11 per page (1-11, 12-22, 23-33), 16s per page; title uses range from API so it matches content
+		// Top Cryptos: static title "Top cryptos by mcap (8s)", 8s per page; lines per page from panel height (resolution-aware)
 		go func() {
+			perPage := 11
 			rangeStarts := []int{1, 12, 23}
 			pageIndex := 0
-			secondsLeft := 16
-			currentRangeLabel := "1-11"
+			secondsLeft := 8
 			refreshContent := func() {
+				ch := make(chan int, 1)
+				app.QueueUpdateDraw(func() {
+					_, _, _, h := vTop.GetRect()
+					if h > 3 {
+						ch <- h - 2
+					} else {
+						ch <- 11
+					}
+					close(ch)
+				})
+				received := 11
+				if v, ok := <-ch; ok {
+					received = v
+				}
+				if received >= 5 && received <= 25 {
+					perPage = received
+					numPages := (33 + perPage - 1) / perPage
+					rangeStarts = make([]int, numPages)
+					for i := 0; i < numPages; i++ {
+						rangeStarts[i] = i*perPage + 1
+					}
+				}
+				if pageIndex >= len(rangeStarts) {
+					pageIndex = 0
+				}
 				start := rangeStarts[pageIndex]
-				c, label := renderCryptoTopWithRange(baseURL, start)
-				currentRangeLabel = label
-				titleTop := fmt.Sprintf(" Top %s by mcap (%ds) ", label, secondsLeft)
+				c, _ := renderCryptoTopWithRange(baseURL, start, perPage)
+				titleTop := fmt.Sprintf(" Top cryptos by mcap (%ds) ", secondsLeft)
 				app.QueueUpdateDraw(func() {
 					vTop.SetTitle(titleTop)
 					vTop.SetText(c)
@@ -728,12 +776,12 @@ func main() {
 			for range ticker.C {
 				secondsLeft--
 				if secondsLeft <= 0 {
-					pageIndex = (pageIndex + 1) % 3
-					secondsLeft = 16
+					pageIndex = (pageIndex + 1) % len(rangeStarts)
+					secondsLeft = 8
 					refreshContent()
 					continue
 				}
-				titleTop := fmt.Sprintf(" Top %s by mcap (%ds) ", currentRangeLabel, secondsLeft)
+				titleTop := fmt.Sprintf(" Top cryptos by mcap (%ds) ", secondsLeft)
 				app.QueueUpdateDraw(func() {
 					vTop.SetTitle(titleTop)
 				})

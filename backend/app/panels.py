@@ -349,18 +349,14 @@ def _fetch_top33_coins() -> list[dict[str, Any]]:
 
 
 @router.get("/crypto/top")
-def crypto_top(range_start: int = 1):
-    """Top 33 cryptos by market cap, 11 per page. Single API call for all 33; slice by range_start to avoid rate limits."""
-    # One request for 33 coins; slice into 1-11, 12-22, 23-33
+def crypto_top(range_start: int = 1, per_page: int = 11):
+    """Top 33 cryptos by market cap. per_page controls slice size (for resolution-aware clients); range_start is 1-based start index."""
     raw = _fetch_top33_coins()
     if not raw:
         return {"status": "ok", "source": "coingecko", "range": "1-11", "coins": []}
-    if range_start <= 11:
-        start_idx, end_idx = 0, 11
-    elif range_start <= 22:
-        start_idx, end_idx = 11, 22
-    else:
-        start_idx, end_idx = 22, 33
+    per_page = max(5, min(25, per_page))
+    start_idx = max(0, range_start - 1)
+    end_idx = min(start_idx + per_page, 33)
     slice_raw = raw[start_idx:end_idx]
     coins = []
     for i, c in enumerate(slice_raw):
