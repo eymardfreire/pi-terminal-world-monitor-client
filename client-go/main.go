@@ -132,9 +132,10 @@ type cryptoBtcEtfResp struct {
 }
 
 type cryptoNewsItem struct {
-	Title   string `json:"title"`
-	Link    string `json:"link"`
-	PubDate string `json:"pub_date"`
+	Title       string `json:"title"`
+	Link        string `json:"link"`
+	PubDate     string `json:"pub_date"`
+	Description string `json:"description"`
 }
 
 type cryptoNewsResp struct {
@@ -428,8 +429,8 @@ const (
 	btcColChange = 8
 )
 
-// renderCryptoBtcEtfPage renders one page (0 or 1) of the BTC ETF Tracker: header + 5 ETFs per page; fixed-width columns for alignment.
-func renderCryptoBtcEtfPage(baseURL string, page int) string {
+// renderCryptoBtcEtfAll renders the full BTC ETF Tracker: header + all ETFs at once; fixed-width columns for alignment.
+func renderCryptoBtcEtfAll(baseURL string) string {
 	var d cryptoBtcEtfResp
 	if err := fetchJSON(baseURL, "/panels/crypto/btc-etf", &d); err != nil {
 		return "No data"
@@ -442,23 +443,15 @@ func renderCryptoBtcEtfPage(baseURL string, page int) string {
 	if d.NetFlowLabel == "NET INFLOW" {
 		netTag = "[green]"
 	}
-	// Header row 1: first block spans TICKER+ISSUER so Est. Flow / Total Vol / ETFs align with columns below
 	firstColWidth := btcColTicker + 1 + btcColIssuer
 	b.WriteString(fmt.Sprintf(" %s%-*s[-] %*s %*s %*s\n",
 		netTag, firstColWidth, d.NetFlowLabel,
 		btcColFlow, fmt.Sprintf("$%.1fM", d.EstFlowM),
 		btcColVol, fmt.Sprintf("%.1fM", d.TotalVolM),
 		btcColChange, fmt.Sprintf("%d↑ %d↓", d.EtfsUp, d.EtfsDown)))
-	// Column headers: same widths as data
 	b.WriteString(fmt.Sprintf(" [gray]%-*s %-*s %*s %*s %*s[-]\n",
 		btcColTicker, "TICKER", btcColIssuer, "ISSUER", btcColFlow, "EST. FLOW", btcColVol, "VOLUME", btcColChange, "CHANGE"))
-	start := page * 5
-	end := start + 5
-	if end > len(d.Etfs) {
-		end = len(d.Etfs)
-	}
-	for i := start; i < end; i++ {
-		e := d.Etfs[i]
+	for _, e := range d.Etfs {
 		flowStr := formatBtcEtfFlow(e.EstFlowM)
 		volStr := formatBtcEtfVol(e.VolumeM)
 		chStr := fmt.Sprintf("%+.2f%%", e.ChangePct)
@@ -475,10 +468,53 @@ func renderCryptoBtcEtfPage(baseURL string, page int) string {
 }
 
 func renderCryptoBtcEtf(baseURL string) string {
-	return renderCryptoBtcEtfPage(baseURL, 0)
+	return renderCryptoBtcEtfAll(baseURL)
 }
 
-func renderCryptoNews(baseURL string) string {
+// wrapLines splits text into lines of at most width runes (word boundaries when possible).
+func wrapLines(s string, width int) []string {
+	if width <= 0 {
+		width = 60
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	var lines []string
+	runes := []rune(s)
+	for len(runes) > 0 {
+		if len(runes) <= width {
+			lines = append(lines, string(runes))
+			break
+		}
+		chunk := runes[:width]
+		lastSpace := -1
+		for i := len(chunk) - 1; i >= 0; i-- {
+			if chunk[i] == ' ' || chunk[i] == '\n' {
+				lastSpace = i
+				break
+			}
+		}
+		if lastSpace > 0 {
+			lines = append(lines, string(runes[:lastSpace]))
+			runes = runes[lastSpace+1:]
+		} else {
+			lines = append(lines, string(runes[:width]))
+			runes = runes[width:]
+		}
+		runes = []rune(strings.TrimLeft(string(runes), " \n\t"))
+	}
+	return lines
+}
+
+// renderCryptoNewsWithSize renders crypto news with headline + blurb per article, filling the panel (width x contentHeight).
+func renderCryptoNewsWithSize(baseURL string, width, contentHeight int) string {
+	if contentHeight <= 0 {
+		contentHeight = 20
+	}
+	if width <= 0 {
+		width = 60
+	}
 	var d cryptoNewsResp
 	if err := fetchJSON(baseURL, "/panels/crypto/news", &d); err != nil {
 		return "No data"
@@ -487,17 +523,50 @@ func renderCryptoNews(baseURL string) string {
 		return "No headlines"
 	}
 	var b strings.Builder
-	for i, it := range d.Items {
-		if i >= 8 {
+	linesUsed := 0
+	for _, it := range d.Items {
+		if linesUsed >= contentHeight {
 			break
 		}
+		// Headline (one line, truncate to width)
 		title := it.Title
-		if len(title) > 55 {
-			title = title[:52] + "..."
+		if len([]rune(title)) > width {
+			title = string([]rune(title)[:width-3]) + "..."
 		}
-		b.WriteString(fmt.Sprintf("  %s\n", title))
+		b.WriteString("  ")
+		b.WriteString(title)
+		b.WriteString("\n\n")
+		linesUsed += 2
+		if linesUsed >= contentHeight {
+			break
+		}
+		// Blurb: wrap description to fill remaining space
+		blurb := it.Description
+		if blurb == "" {
+			blurb = "—"
+		}
+		wrapped := wrapLines(blurb, width-2) // indent 2 spaces
+		remaining := contentHeight - linesUsed
+		for i, w := range wrapped {
+			if i >= remaining {
+				break
+			}
+			b.WriteString("  ")
+			b.WriteString(w)
+			b.WriteString("\n")
+			linesUsed++
+		}
+		// One blank line between articles if space
+		if linesUsed < contentHeight {
+			b.WriteString("\n")
+			linesUsed++
+		}
 	}
 	return strings.TrimSuffix(b.String(), "\n")
+}
+
+func renderCryptoNews(baseURL string) string {
+	return renderCryptoNewsWithSize(baseURL, 60, 24)
 }
 
 // renderCrypto is used only when crypto is a single panel (legacy); prefer crypto 3-subpanel layout.
@@ -640,8 +709,8 @@ func main() {
 			tvStable.SetBorder(true).SetTitle(" Stablecoins ")
 			tvNews := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoNews(baseURL))
 			tvNews.SetBorder(true).SetTitle(" Crypto News ")
-			tvBtc := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoBtcEtfPage(baseURL, 0))
-			tvBtc.SetBorder(true).SetTitle(" BTC ETF Tracker (16s) ")
+			tvBtc := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoBtcEtfAll(baseURL))
+			tvBtc.SetBorder(true).SetTitle(" BTC ETF Tracker (6s) ")
 			cryptoSubpanelViews[0], cryptoSubpanelViews[1], cryptoSubpanelViews[2], cryptoSubpanelViews[3] = tvTop, tvStable, tvNews, tvBtc
 			topRow := tview.NewFlex().SetDirection(tview.FlexColumn).
 				AddItem(tvTop, 0, 1, false).
@@ -796,21 +865,39 @@ func main() {
 				app.QueueUpdateDraw(func() { vStable.SetText(c) })
 			}
 		}()
-		// Crypto News: refresh every 6s
+		// Crypto News: refresh every 6s; use panel size to fill with headline + blurb
 		go func() {
+			doRefresh := func() {
+				ch := make(chan struct{ w, h int }, 1)
+				app.QueueUpdateDraw(func() {
+					x, y, w, h := vNews.GetRect()
+					_, _ = x, y
+					if w < 20 {
+						w = 60
+					}
+					if h < 3 {
+						h = 24
+					}
+					ch <- struct{ w, h int }{w: w, h: h - 2}
+					close(ch)
+				})
+				size := <-ch
+				c := renderCryptoNewsWithSize(baseURL, size.w, size.h)
+				app.QueueUpdateDraw(func() { vNews.SetText(c) })
+			}
+			doRefresh() // initial fill with real size
 			ticker := time.NewTicker(6 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
-				c := renderCryptoNews(baseURL)
-				app.QueueUpdateDraw(func() { vNews.SetText(c) })
+				doRefresh()
 			}
 		}()
-		// BTC ETF Tracker: 2 pages (5 ETFs each), 16s per page, live countdown in title
+		// BTC ETF Tracker: show all ETFs at once, refresh every 6s, live countdown in title
 		go func() {
-			pageIndex := 0
-			secondsLeft := 16
+			refreshSecs := 6
+			secondsLeft := refreshSecs
 			refreshBtc := func() {
-				c := renderCryptoBtcEtfPage(baseURL, pageIndex)
+				c := renderCryptoBtcEtfAll(baseURL)
 				title := fmt.Sprintf(" BTC ETF Tracker (%ds) ", secondsLeft)
 				app.QueueUpdateDraw(func() {
 					vBtc.SetTitle(title)
@@ -823,8 +910,7 @@ func main() {
 			for range ticker.C {
 				secondsLeft--
 				if secondsLeft <= 0 {
-					pageIndex = (pageIndex + 1) % 2
-					secondsLeft = 16
+					secondsLeft = refreshSecs
 					refreshBtc()
 					continue
 				}

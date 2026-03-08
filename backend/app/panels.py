@@ -445,6 +445,7 @@ def _fetch_crypto_news() -> dict[str, Any]:
                 title = ""
                 link = ""
                 pub_date = ""
+                description = ""
                 for child in tag:
                     name = child.tag.split("}")[-1] if "}" in child.tag else child.tag
                     if name == "title":
@@ -453,8 +454,15 @@ def _fetch_crypto_news() -> dict[str, Any]:
                         link = text_of(child)
                     elif name == "pubDate":
                         pub_date = text_of(child)
+                    elif name == "description":
+                        description = text_of(child)
                 if title:
-                    items.append({"title": title[:120], "link": link, "pub_date": pub_date})
+                    items.append({
+                        "title": title[:120],
+                        "link": link,
+                        "pub_date": pub_date,
+                        "description": description[:500] if description else "",
+                    })
                 if len(items) >= CRYPTO_NEWS_MAX_ITEMS:
                     break
     except Exception:
