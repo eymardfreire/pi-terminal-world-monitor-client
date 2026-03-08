@@ -1,0 +1,1 @@
+# Terminal dashboard client package

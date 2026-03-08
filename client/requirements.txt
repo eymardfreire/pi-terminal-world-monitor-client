@@ -1,0 +1,5 @@
+# Pi Terminal World Monitor – Terminal Client
+# Python 3.10+; target: Raspberry Pi 3B (DietPi/Linux)
+
+httpx>=0.26.0
+blessed>=1.20.0

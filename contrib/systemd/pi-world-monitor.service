@@ -1,0 +1,29 @@
+# Pi Terminal World Monitor – systemd user service
+# Install: cp to ~/.config/systemd/user/ and edit paths + BACKEND_URL
+# Enable:  systemctl --user enable pi-world-monitor
+# Start:   systemctl --user start pi-world-monitor
+
+[Unit]
+Description=Pi Terminal World Monitor (dashboard client)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Set your backend URL (replace with your VPS host and port)
+Environment=BACKEND_URL=http://localhost:8000
+# Optional: use a file (create ~/.config/pi-world-monitor/env with BACKEND_URL=...)
+# EnvironmentFile=%h/.config/pi-world-monitor/env
+
+# Adjust paths to your install (e.g. /home/dietpi/pi-terminal-world-monitor-client/client)
+WorkingDirectory=%h/pi-terminal-world-monitor-client/client
+ExecStart=%h/pi-terminal-world-monitor-client/client/.venv/bin/python -m client
+Restart=on-failure
+RestartSec=10
+
+# Run in foreground so journalctl shows output
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
