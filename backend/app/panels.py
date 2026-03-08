@@ -457,11 +457,16 @@ def _fetch_crypto_news() -> dict[str, Any]:
                     elif name == "pubDate":
                         pub_date = text_of(child)
                     elif name == "description":
-                        description = text_of(child)
+                        # Feed can have multiple description elements (e.g. description then dc:description); keep first non-empty
+                        candidate = text_of(child)
+                        if candidate:
+                            description = candidate
                     elif name == "encoded":
                         # content:encoded often has full/summary text; use if description empty
                         if not description:
-                            description = text_of(child)
+                            candidate = text_of(child)
+                            if candidate:
+                                description = candidate
                 if title:
                     # Strip HTML tags from description for plain-text display
                     if description and "<" in description:
