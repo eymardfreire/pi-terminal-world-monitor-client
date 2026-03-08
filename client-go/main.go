@@ -560,7 +560,7 @@ func main() {
 		if key == "crypto" {
 			// Crypto: 4 bordered sub-panels in 2×2 (Top Cryptos | Stable Coins; Crypto News | BTC ETF)
 			tvTop := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoTop(baseURL, 1))
-			tvTop.SetBorder(true).SetTitle(" Top cryptos (1-12) ")
+			tvTop.SetBorder(true).SetTitle(" Top 1-10 by mcap (16s) ")
 			tvStable := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoStablecoins(baseURL))
 			tvStable.SetBorder(true).SetTitle(" Stablecoins ")
 			tvNews := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoNews(baseURL))
@@ -682,17 +682,18 @@ func main() {
 			defer ticker.Stop()
 			for range ticker.C {
 				secondsLeft--
+				if secondsLeft <= 0 {
+					pageIndex = (pageIndex + 1) % 3
+					secondsLeft = 16
+					refreshContent()
+					continue
+				}
 				start := rangeStarts[pageIndex]
 				label := rangeLabel(start)
 				titleTop := fmt.Sprintf(" Top %s by mcap (%ds) ", label, secondsLeft)
 				app.QueueUpdateDraw(func() {
 					vTop.SetTitle(titleTop)
 				})
-				if secondsLeft <= 0 {
-					pageIndex = (pageIndex + 1) % 3
-					secondsLeft = 16
-					refreshContent()
-				}
 			}
 		}()
 		// Stablecoins: refresh every 6s
