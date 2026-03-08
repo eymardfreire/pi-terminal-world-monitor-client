@@ -2,6 +2,19 @@
 
 This folder is a **change proposal only**. Implementation will be done on a **different machine (Linux)** with a **different agent**. Copy this entire change folder to the target environment and use it as the single source of truth.
 
+---
+
+## Progress handoff (implementation in progress)
+
+If you are **continuing development** in the existing repo (`pi-terminal-world-monitor-client`):
+
+- **Current state and next steps:** See repo root **`docs/HANDOFF-PROGRESS.md`** (what’s done, how to run backend and Go client, next steps).
+- **Prioritized next steps:** See **`docs/NEXT-STEPS.md`** (weather API, Global Situation Map, Pi validation, etc.).
+
+Then use this folder’s `tasks.md` and `specs/` to implement remaining items.
+
+---
+
 ## What to copy
 
 Copy the whole directory:

@@ -40,6 +40,9 @@ ENV/
 *.log
 .cache/
 
+# Go client binary
+client-go/pi-world-monitor-client
+
 # OS
 .DS_Store
 Thumbs.db

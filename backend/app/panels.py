@@ -12,16 +12,58 @@ from fastapi import APIRouter
 router = APIRouter(prefix="/panels", tags=["panels"])
 
 # In-memory cache for external APIs (TTL seconds, max entries)
-_weather_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=64, ttl=600)  # 10 min
+_weather_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=128, ttl=600)  # 10 min
 _gsm_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=4, ttl=300)  # 5 min
 
-# Cities for Weather Watch (name, lat, lon)
-WEATHER_LOCATIONS = [
-    ("London", 51.5074, -0.1278),
-    ("New York", 40.7128, -74.0060),
-    ("Tokyo", 35.6762, 139.6503),
-    ("Berlin", 52.5200, 13.4050),
-]
+# Top cities per continent for Weather Watch: continent -> [(name, lat, lon), ...]
+WEATHER_BY_CONTINENT: dict[str, list[tuple[str, float, float]]] = {
+    "North America": [
+        ("New York", 40.7128, -74.0060),
+        ("Los Angeles", 34.0522, -118.2437),
+        ("Chicago", 41.8781, -87.6298),
+        ("Toronto", 43.6532, -79.3832),
+    ],
+    "Central America": [
+        ("Mexico City", 19.4326, -99.1332),
+        ("Guatemala City", 14.6349, -90.5069),
+        ("Havana", 23.1136, -82.3666),
+    ],
+    "South America": [
+        ("São Paulo", -23.5505, -46.6333),
+        ("Buenos Aires", -34.6037, -58.3816),
+        ("Lima", -12.0464, -77.0428),
+        ("Bogotá", 4.7110, -74.0721),
+    ],
+    "Europe": [
+        ("London", 51.5074, -0.1278),
+        ("Berlin", 52.5200, 13.4050),
+        ("Paris", 48.8566, 2.3522),
+        ("Madrid", 40.4168, -3.7038),
+    ],
+    "Africa": [
+        ("Cairo", 30.0444, 31.2357),
+        ("Lagos", 6.5244, 3.3792),
+        ("Johannesburg", -26.2041, 28.0473),
+        ("Nairobi", -1.2921, 36.8219),
+    ],
+    "Middle East": [
+        ("Dubai", 25.2048, 55.2708),
+        ("Tel Aviv", 32.0853, 34.7818),
+        ("Riyadh", 24.7136, 46.6753),
+        ("Istanbul", 41.0082, 28.9784),
+    ],
+    "Asia": [
+        ("Tokyo", 35.6762, 139.6503),
+        ("Beijing", 39.9042, 116.4074),
+        ("Mumbai", 19.0760, 72.8777),
+        ("Singapore", 1.3521, 103.8198),
+    ],
+    "Oceania": [
+        ("Sydney", -33.8688, 151.2093),
+        ("Melbourne", -37.8136, 144.9631),
+        ("Auckland", -36.8509, 174.7645),
+    ],
+}
 
 # WMO weather code -> short label
 WEATHER_CODE_LABELS: dict[int, str] = {
@@ -61,6 +103,8 @@ def _fetch_one_weather(lat: float, lon: float) -> dict[str, Any] | None:
         "latitude": lat,
         "longitude": lon,
         "current": "temperature_2m,weather_code",
+        "daily": "temperature_2m_max,temperature_2m_min",
+        "timezone": "auto",
     }
     cache_key = f"{lat:.4f},{lon:.4f}"
     if cache_key in _weather_cache:
@@ -71,9 +115,20 @@ def _fetch_one_weather(lat: float, lon: float) -> dict[str, Any] | None:
             r.raise_for_status()
             data = r.json()
         current = data.get("current") or {}
+        daily = data.get("daily") or {}
         temp = current.get("temperature_2m")
         code = current.get("weather_code", 0)
-        result = {"temp": temp, "conditions": _weather_code_to_conditions(code)}
+        maxes = daily.get("temperature_2m_max") or []
+        mins = daily.get("temperature_2m_min") or []
+        temp_high = maxes[0] if maxes else None
+        temp_low = mins[0] if mins else None
+        result = {
+            "temp": temp,
+            "temp_high": temp_high,
+            "temp_low": temp_low,
+            "conditions": _weather_code_to_conditions(code),
+            "weather_code": code,
+        }
         _weather_cache[cache_key] = result
         return result
     except Exception:
@@ -104,25 +159,43 @@ def world_clock():
     }
 
 
+def _round_temp(t: float | None) -> str:
+    if t is None:
+        return "—"
+    return str(int(round(t)))
+
+
 @router.get("/weather")
 def weather():
-    """Weather Watch panel: Open-Meteo current conditions for configured cities."""
-    locations: list[dict[str, str]] = []
-    for name, lat, lon in WEATHER_LOCATIONS:
-        one = _fetch_one_weather(lat, lon)
-        if one is not None:
-            temp = one["temp"]
-            locations.append({
-                "name": name,
-                "temp": str(int(round(temp))) if temp is not None else "—",
-                "conditions": one["conditions"],
-            })
-        else:
-            locations.append({"name": name, "temp": "—", "conditions": "No data"})
+    """Weather Watch panel: Open-Meteo current + daily high/low by continent. Client can cycle continents."""
+    continents_out: list[dict[str, Any]] = []
+    for continent, cities in WEATHER_BY_CONTINENT.items():
+        locations: list[dict[str, Any]] = []
+        for name, lat, lon in cities:
+            one = _fetch_one_weather(lat, lon)
+            if one is not None:
+                locations.append({
+                    "name": name,
+                    "temp": _round_temp(one.get("temp")),
+                    "temp_high": _round_temp(one.get("temp_high")),
+                    "temp_low": _round_temp(one.get("temp_low")),
+                    "conditions": one["conditions"],
+                    "weather_code": one.get("weather_code", 0),
+                })
+            else:
+                locations.append({
+                    "name": name,
+                    "temp": "—",
+                    "temp_high": "—",
+                    "temp_low": "—",
+                    "conditions": "No data",
+                    "weather_code": 0,
+                })
+        continents_out.append({"name": continent, "locations": locations})
     return {
-        "status": "ok" if locations else "partial",
-        "locations": locations,
-        "message": "" if locations else "Open-Meteo unavailable.",
+        "status": "ok",
+        "continents": continents_out,
+        "message": "",
     }
 
 

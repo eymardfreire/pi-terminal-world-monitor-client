@@ -7,49 +7,86 @@ Run the terminal dashboard on a Pi 3B with DietPi. You can run it manually or **
 - Raspberry Pi 3B with [DietPi](https://dietpi.com/) installed (fresh install is fine).
 - Backend running somewhere reachable from the Pi (e.g. your VPS). The Pi only talks to this backend.
 
-## 1. Install from GitHub
+---
 
-Clone the repo (use your GitHub username if you forked, or the original repo):
+## Option A: Go client (recommended)
+
+Single binary, [tview](https://github.com/rivo/tview)-based UI with proper panel borders and layout.
+
+### 1. Install Go on the Pi (if not present)
+
+```bash
+# On DietPi: install from package or download
+sudo apt install -y golang
+# or use the official binary: https://go.dev/dl/
+```
+
+### 2. Clone and build
+
+```bash
+cd ~
+git clone https://github.com/YOUR_USERNAME/pi-terminal-world-monitor-client.git
+cd pi-terminal-world-monitor-client/client-go
+go mod tidy
+go build -o pi-world-monitor-client .
+```
+
+### 3. Run manually
+
+```bash
+export BACKEND_URL=http://YOUR_VPS:8000
+./pi-world-monitor-client
+```
+
+Press **Q** to quit.
+
+### 4. Run at startup (systemd)
+
+Use the same systemd steps below, but set `ExecStart` to the Go binary, e.g.:
+
+```bash
+ExecStart=%h/pi-terminal-world-monitor-client/client-go/pi-world-monitor-client
+WorkingDirectory=%h/pi-terminal-world-monitor-client/client-go
+```
+
+---
+
+## Option B: Python client
+
+### 1. Install from GitHub
 
 ```bash
 cd ~
 git clone https://github.com/YOUR_USERNAME/pi-terminal-world-monitor-client.git
 cd pi-terminal-world-monitor-client/client
-```
-
-Install Python dependencies. DietPi usually has Python 3; use the same major version for the venv:
-
-```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-## 2. Configure backend URL
-
-Set the URL of your backend (replace with your VPS host and port):
+### 2. Configure backend URL
 
 ```bash
 export BACKEND_URL=http://YOUR_VPS_IP_OR_HOST:8000
 ```
 
-To make this persistent, put it in a file and source it, or use the systemd env file below.
-
-## 3. Run manually
+### 3. Run manually
 
 ```bash
 cd ~/pi-terminal-world-monitor-client/client
 source .venv/bin/activate
-export BACKEND_URL=http://YOUR_VPS:8000   # if not already set
+export BACKEND_URL=http://YOUR_VPS:8000
 python -m client
 ```
 
 Press **Ctrl+C** to exit.
 
-## 4. Run at startup (DietPi)
+---
+
+## Run at startup (DietPi) – either client
 
 Two options: **systemd user service** (recommended) or **DietPi autostart**.
 
-### Option A: Systemd user service (after login)
+### Systemd user service (after login)
 
 Runs the client when you log in (or when the default user auto-logs in to console). Good for “dashboard on the console I see when I sit at the Pi.”
 
@@ -70,7 +107,7 @@ echo 'BACKEND_URL=http://YOUR_VPS:8000' > ~/.config/pi-world-monitor/env
 nano ~/.config/systemd/user/pi-world-monitor.service
 ```
 
-Set `BACKEND_URL` in the `Environment=` line, or use `EnvironmentFile=` pointing to `~/.config/pi-world-monitor/env`. Ensure `WorkingDirectory` and `ExecStart` point to your clone (e.g. `/home/dietpi/pi-terminal-world-monitor-client/client`).
+Set `BACKEND_URL` in the `Environment=` line, or use `EnvironmentFile=` pointing to `~/.config/pi-world-monitor/env`. For the **Go client**, set `ExecStart=%h/pi-terminal-world-monitor-client/client-go/pi-world-monitor-client` and `WorkingDirectory=%h/pi-terminal-world-monitor-client/client-go`. For the **Python client**, use `client/` and `python -m client` as in the contrib service file.
 
 3. Enable and start (user session):
 
@@ -88,7 +125,7 @@ To see output:
 journalctl --user -u pi-world-monitor -f
 ```
 
-### Option B: DietPi autostart script
+### DietPi autostart script
 
 If you prefer to start the dashboard from DietPi’s autostart (e.g. a custom command at boot):
 

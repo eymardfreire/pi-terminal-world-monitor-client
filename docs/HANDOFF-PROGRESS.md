@@ -14,13 +14,13 @@ Use this document to continue development with a new agent or session. It summar
 
 - **Backend (VPS)**
   - FastAPI app: `GET /health`, `GET /panels`, `GET /panels/world-clock`, `GET /panels/weather`, `GET /panels/global-situation-map`.
-  - World Clock: server UTC and zones. Weather: **Open-Meteo** (London, New York, Tokyo, Berlin), 10 min cache. Global Situation Map: regions with severity + event types (stub data; pipeline ready for real feeds).
+  - World Clock: server UTC and zones. Weather: **Open-Meteo** by continent (North America, Central/South America, Europe, Africa, Middle East, Asia, Oceania) with top cities each; current temp + daily high/low; 10 min cache. Global Situation Map: regions with severity + event types (stub data; pipeline ready for real feeds).
   - Deployed on DigitalOcean droplet **209.38.141.129** (Ubuntu 24.10). Run: `cd /opt/pi-terminal-world-monitor-client/backend && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000`. After code changes on GitHub: `git pull` on droplet then restart uvicorn.
 
 - **Go client (recommended)**
   - `client-go/`: Go 1.21 + [tview](https://github.com/rivo/tview). Build: `go mod tidy && go build -o pi-world-monitor-client .`
-  - Env: `BACKEND_URL` (default `http://localhost:8000`), `CYCLE_SECONDS` (default 8). Press **Q** to quit.
-  - 2×2 grid: World Clock, Weather Watch, **Global Situation Map** (severity color-coded: red/yellow/cyan/green). Refreshes every N seconds. Dynamic colors enabled for GSM.
+  - Env: `BACKEND_URL`, `CYCLE_SECONDS` (default 8), `GRID_COLS` / `GRID_ROWS` (default 2×2; use e.g. 3×3 for more, smaller panels). Press **Q** to quit.
+  - Weather Watch: one continent per refresh (cycles through all); current temp + low/high; **heat map** (blue ≤10°C, green 11–27°C, red ≥28°C); **weather icons** (☀☁🌧❄⛈ etc.). Global Situation Map: severity color-coded. Refreshes every N seconds.
 
 - **Python client**
   - `client/`: Python + blessed. Multi-panel grid; use if Go isn’t available. Run: `python -m client` from `client/` with venv and `BACKEND_URL` set.

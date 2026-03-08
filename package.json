@@ -1,0 +1,12 @@
+{
+  "name": "pi-terminal-world-monitor-client",
+  "version": "0.1.0",
+  "description": "Terminal-based world monitor client for Raspberry Pi",
+  "private": true,
+  "scripts": {
+    "openspec": "openspec"
+  },
+  "devDependencies": {
+    "@fission-ai/openspec": "latest"
+  }
+}

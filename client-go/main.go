@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -17,6 +19,8 @@ import (
 const (
 	defaultBackendURL = "http://localhost:8000"
 	defaultCycleSecs  = 8
+	defaultGridCols   = 2
+	defaultGridRows   = 2
 	requestTimeout    = 10 * time.Second
 )
 
@@ -44,13 +48,22 @@ type zoneInfo struct {
 type weatherLoc struct {
 	Name       string `json:"name"`
 	Temp       string `json:"temp"`
+	TempHigh   string `json:"temp_high"`
+	TempLow    string `json:"temp_low"`
 	Conditions string `json:"conditions"`
+	WeatherCode int   `json:"weather_code"`
+}
+
+type weatherContinent struct {
+	Name      string       `json:"name"`
+	Locations []weatherLoc `json:"locations"`
 }
 
 type weatherResp struct {
-	Status    string       `json:"status"`
-	Message   string       `json:"message"`
-	Locations []weatherLoc `json:"locations"`
+	Status     string              `json:"status"`
+	Message    string              `json:"message"`
+	Continents []weatherContinent  `json:"continents"`
+	Locations  []weatherLoc        `json:"locations"` // legacy flat list
 }
 
 type gsmRegion struct {
@@ -114,6 +127,51 @@ func renderWorldClock(baseURL string) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
+var (
+	weatherContinentIndex int
+	weatherContinentMu    sync.Mutex
+)
+
+// weatherIcon returns a single Unicode symbol for WMO code (terminal-friendly).
+func weatherIcon(code int) string {
+	switch {
+	case code == 0:
+		return "☀"
+	case code >= 1 && code <= 3:
+		return "☁"
+	case code == 45 || code == 48:
+		return "🌫"
+	case code >= 51 && code <= 67:
+		return "🌧"
+	case code >= 71 && code <= 86:
+		return "❄"
+	case code >= 95 && code <= 99:
+		return "⛈"
+	case code >= 80 && code <= 82:
+		return "🌦"
+	default:
+		return "·"
+	}
+}
+
+// tempColor returns tview color tag for heat map: cold=blue, hot=red, mild=green.
+func tempColor(tempStr string) string {
+	if tempStr == "" || tempStr == "—" {
+		return "[gray]"
+	}
+	n, err := strconv.Atoi(tempStr)
+	if err != nil {
+		return "[white]"
+	}
+	if n <= 10 {
+		return "[blue]"
+	}
+	if n >= 28 {
+		return "[red]"
+	}
+	return "[green]"
+}
+
 func renderWeather(baseURL string) string {
 	var d weatherResp
 	if err := fetchJSON(baseURL, "/panels/weather", &d); err != nil {
@@ -122,12 +180,37 @@ func renderWeather(baseURL string) string {
 	if d.Status == "placeholder" && d.Message != "" {
 		return d.Message
 	}
-	if len(d.Locations) == 0 {
+	var locations []weatherLoc
+	var continentName string
+	if len(d.Continents) > 0 {
+		weatherContinentMu.Lock()
+		idx := weatherContinentIndex % len(d.Continents)
+		weatherContinentIndex++
+		weatherContinentMu.Unlock()
+		c := d.Continents[idx]
+		continentName = c.Name
+		locations = c.Locations
+	} else if len(d.Locations) > 0 {
+		locations = d.Locations
+	}
+	if len(locations) == 0 {
 		return "No locations yet."
 	}
 	var b strings.Builder
-	for _, loc := range d.Locations {
-		b.WriteString(fmt.Sprintf("  %s: %s° %s\n", loc.Name, loc.Temp, loc.Conditions))
+	if continentName != "" {
+		b.WriteString(fmt.Sprintf(" [yellow]%s[-]\n", continentName))
+	}
+	for _, loc := range locations {
+		icon := weatherIcon(loc.WeatherCode)
+		tag := tempColor(loc.Temp)
+		hi, lo := loc.TempHigh, loc.TempLow
+		if hi == "" {
+			hi = "—"
+		}
+		if lo == "" {
+			lo = "—"
+		}
+		b.WriteString(fmt.Sprintf("  %s %s %s%s°[-] (%s°/ %s°) %s\n", icon, loc.Name, tag, loc.Temp, lo, hi, loc.Conditions))
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
@@ -208,13 +291,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	cols := defaultGridCols
+	rows := defaultGridRows
+	if s := os.Getenv("GRID_COLS"); s != "" {
+		if c, err := strconv.Atoi(s); err == nil && c >= 1 && c <= 6 {
+			cols = c
+		}
+	}
+	if s := os.Getenv("GRID_ROWS"); s != "" {
+		if r, err := strconv.Atoi(s); err == nil && r >= 1 && r <= 6 {
+			rows = r
+		}
+	}
+
 	app := tview.NewApplication()
 
-	// Build grid: 2 columns, 2 rows by default; fill with panels in order
-	cols, rows := 2, 2
 	n := cols * rows
 	if n > len(panels) {
-		// repeat panels to fill
 		for len(panels) < n {
 			panels = append(panels, panels...)
 		}
@@ -223,10 +316,19 @@ func main() {
 		panels = panels[:n]
 	}
 
-	// Grid: cols x rows for panels, then one full-width row for footer
+	// Grid columns: equal width per column; rows: equal height + 1 for footer
+	gridCols := make([]int, cols)
+	for i := 0; i < cols; i++ {
+		gridCols[i] = -1
+	}
+	gridRows := make([]int, rows+1)
+	for i := 0; i < rows; i++ {
+		gridRows[i] = -1
+	}
+	gridRows[rows] = 1
 	grid := tview.NewGrid().
-		SetColumns(-1, -1).
-		SetRows(-1, -1, 1).
+		SetColumns(gridCols...).
+		SetRows(gridRows...).
 		SetBorders(false)
 
 	// One TextView per cell; we'll update them on refresh

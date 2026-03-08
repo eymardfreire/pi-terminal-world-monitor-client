@@ -1,0 +1,25 @@
+# Pi Terminal World Monitor – Go client (systemd user service)
+# Install: cp to ~/.config/systemd/user/ and edit BACKEND_URL
+# Enable:  systemctl --user enable pi-world-monitor-go
+# Start:   systemctl --user start pi-world-monitor-go
+
+[Unit]
+Description=Pi Terminal World Monitor (Go/tview client)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=BACKEND_URL=http://localhost:8000
+# EnvironmentFile=%h/.config/pi-world-monitor/env
+
+WorkingDirectory=%h/pi-terminal-world-monitor-client/client-go
+ExecStart=%h/pi-terminal-world-monitor-client/client-go/pi-world-monitor-client
+Restart=on-failure
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
