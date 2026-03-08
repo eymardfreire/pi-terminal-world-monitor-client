@@ -327,20 +327,21 @@ def _fetch_coingecko_markets(
     return []
 
 
-# Single fetch of top 33 so all three panels (1-11, 12-22, 23-33) share one API call and avoid rate limits
-_TOP33_CACHE_KEY = "top33_1h_24h_7d"
+# Single fetch of top 56 so client can cycle through more pages; one API call to avoid rate limits
+_TOP56_CACHE_KEY = "top56_1h_24h_7d"
+TOP_COINS_COUNT = 56
 
 
-def _fetch_top33_coins() -> list[dict[str, Any]]:
-    if _TOP33_CACHE_KEY in _crypto_cache:
-        return _crypto_cache[_TOP33_CACHE_KEY]
+def _fetch_top56_coins() -> list[dict[str, Any]]:
+    if _TOP56_CACHE_KEY in _crypto_cache:
+        return _crypto_cache[_TOP56_CACHE_KEY]
     for attempt in range(2):
         if attempt == 1:
             time.sleep(1)
         try:
-            raw = _fetch_coingecko_markets(page=1, per_page=33, price_change="1h,24h,7d")
+            raw = _fetch_coingecko_markets(page=1, per_page=TOP_COINS_COUNT, price_change="1h,24h,7d")
             if raw:
-                _crypto_cache[_TOP33_CACHE_KEY] = raw
+                _crypto_cache[_TOP56_CACHE_KEY] = raw
                 return raw
         except Exception:
             if attempt == 0:
@@ -351,13 +352,13 @@ def _fetch_top33_coins() -> list[dict[str, Any]]:
 
 @router.get("/crypto/top")
 def crypto_top(range_start: int = 1, per_page: int = 11):
-    """Top 33 cryptos by market cap. per_page controls slice size (for resolution-aware clients); range_start is 1-based start index."""
-    raw = _fetch_top33_coins()
+    """Top 56 cryptos by market cap. per_page controls slice size (for resolution-aware clients); range_start is 1-based start index."""
+    raw = _fetch_top56_coins()
     if not raw:
         return {"status": "ok", "source": "coingecko", "range": "1-11", "coins": []}
     per_page = max(5, min(25, per_page))
     start_idx = max(0, range_start - 1)
-    end_idx = min(start_idx + per_page, 33)
+    end_idx = min(start_idx + per_page, TOP_COINS_COUNT)
     slice_raw = raw[start_idx:end_idx]
     coins = []
     for i, c in enumerate(slice_raw):
@@ -446,15 +447,19 @@ def _fetch_gainers_losers() -> dict[str, Any]:
     non_stable.sort(key=lambda x: (x.get("price_change_percentage_24h") or -1e9), reverse=True)
     gainers = []
     for c in non_stable[:GAINERS_LOSERS_COUNT]:
+        p24 = c.get("price_change_percentage_24h")
         gainers.append({
             "symbol": (c.get("symbol") or "").upper(),
             "price": round(c.get("current_price") or 0, 4),
+            "change_24h_pct": round(p24, 2) if p24 is not None else None,
         })
     losers = []
     for c in non_stable[-GAINERS_LOSERS_COUNT:]:
+        p24 = c.get("price_change_percentage_24h")
         losers.append({
             "symbol": (c.get("symbol") or "").upper(),
             "price": round(c.get("current_price") or 0, 4),
+            "change_24h_pct": round(p24, 2) if p24 is not None else None,
         })
     losers.reverse()  # worst first
     out = {"status": "ok", "source": "coingecko", "gainers": gainers, "losers": losers}

@@ -115,8 +115,9 @@ type cryptoStablecoinsResp struct {
 }
 
 type cryptoGainersLosersEntry struct {
-	Symbol string  `json:"symbol"`
-	Price  float64 `json:"price"`
+	Symbol        string   `json:"symbol"`
+	Price         float64  `json:"price"`
+	Change24hPct *float64 `json:"change_24h_pct"`
 }
 
 type cryptoGainersLosersResp struct {
@@ -397,14 +398,20 @@ func formatStableVol(b *float64) string {
 	return fmt.Sprintf("$%.0fM", *b*1000)
 }
 
-func renderCryptoStablecoins(baseURL string) string {
-	var d cryptoStablecoinsResp
-	if err := fetchJSON(baseURL, "/panels/crypto/stablecoins", &d); err != nil {
+// renderCryptoStablecoinsPageFromData renders one page: for each coin, status on one line then mcap/vol below (same page).
+func renderCryptoStablecoinsPageFromData(d *cryptoStablecoinsResp, pageStart, perPage int) string {
+	if d == nil || len(d.Coins) == 0 {
 		return "No data"
 	}
-	if d.Status != "ok" {
-		return "No data"
+	n := len(d.Coins)
+	if pageStart >= n {
+		pageStart = 0
 	}
+	end := pageStart + perPage
+	if end > n {
+		end = n
+	}
+	page := d.Coins[pageStart:end]
 	var b strings.Builder
 	statusTag := "[green]"
 	if d.StatusLabel != "Healthy" {
@@ -414,16 +421,13 @@ func renderCryptoStablecoins(baseURL string) string {
 	if d.MarketCapB != nil && d.VolumeB != nil {
 		b.WriteString(fmt.Sprintf("  MCap: $%.1fB | Vol: $%.1fB", *d.MarketCapB, *d.VolumeB))
 	}
-	b.WriteString("\n\n [::b]PEG HEALTH[-]\n")
-	for _, c := range d.Coins {
+	b.WriteString("\n\n")
+	for _, c := range page {
 		pegTag := "[green]"
 		if c.PegStatus != "ON PEG" {
 			pegTag = "[red]"
 		}
-		b.WriteString(fmt.Sprintf("  [::b]%s[-] %s  $%.4f  %s%s[-] %.2f%%\n", c.Symbol, c.Name, c.Price, pegTag, c.PegStatus, c.DeviationPct))
-	}
-	b.WriteString("\n [::b]SUPPLY & VOLUME[-]\n")
-	for _, c := range d.Coins {
+		b.WriteString(fmt.Sprintf("  %-6s  $%.2f  %s%s[-] %.2f%%\n", c.Symbol, c.Price, pegTag, c.PegStatus, c.DeviationPct))
 		mcapStr := "—"
 		if c.MarketCapB != nil {
 			if *c.MarketCapB >= 1 {
@@ -441,12 +445,29 @@ func renderCryptoStablecoins(baseURL string) string {
 		if c.PriceChange24hPct != nil && *c.PriceChange24hPct < 0 {
 			chgTag = "[red]"
 		}
-		b.WriteString(fmt.Sprintf("  [::b]%s[-]  %s  %s  %s%s[-]\n", c.Symbol, mcapStr, volStr, chgTag, chgStr))
+		b.WriteString(fmt.Sprintf("         MCap %s  Vol %s  %s%s[-]\n", mcapStr, volStr, chgTag, chgStr))
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-func renderCryptoGainersLosers(baseURL string, showGainers bool) string {
+func renderCryptoStablecoinsPage(baseURL string, pageStart, perPage int) string {
+	var d cryptoStablecoinsResp
+	if err := fetchJSON(baseURL, "/panels/crypto/stablecoins", &d); err != nil {
+		return "No data"
+	}
+	if d.Status != "ok" {
+		return "No data"
+	}
+	return renderCryptoStablecoinsPageFromData(&d, pageStart, perPage)
+}
+
+func renderCryptoStablecoins(baseURL string) string {
+	return renderCryptoStablecoinsPage(baseURL, 0, 6)
+}
+
+const gainersLosersPerPage = 12
+
+func renderCryptoGainersLosers(baseURL string, showGainers bool, pageStart, perPage int) string {
 	var d cryptoGainersLosersResp
 	if err := fetchJSON(baseURL, "/panels/crypto/gainers-losers", &d); err != nil {
 		return "No data"
@@ -462,16 +483,29 @@ func renderCryptoGainersLosers(baseURL string, showGainers bool) string {
 		tag = "[green]"
 		title = "Gainers"
 	}
+	n := len(list)
+	if pageStart >= n {
+		pageStart = 0
+	}
+	end := pageStart + perPage
+	if end > n {
+		end = n
+	}
+	page := list[pageStart:end]
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf(" [::b]Crypto %s[-]\n\n", title))
-	for _, e := range list {
+	for _, e := range page {
 		priceStr := fmt.Sprintf("%.4f", e.Price)
 		if e.Price >= 1000 {
 			priceStr = fmt.Sprintf("%.2f", e.Price)
 		} else if e.Price >= 1 {
 			priceStr = fmt.Sprintf("%.2f", e.Price)
 		}
-		b.WriteString(fmt.Sprintf("  %s%-8s[-] $%s\n", tag, e.Symbol, priceStr))
+		chgStr := "—"
+		if e.Change24hPct != nil {
+			chgStr = fmt.Sprintf("%+.2f%%", *e.Change24hPct)
+		}
+		b.WriteString(fmt.Sprintf("  %s%-8s[-] $%-10s  %s%s[-]\n", tag, e.Symbol, priceStr, tag, chgStr))
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
@@ -814,7 +848,7 @@ func main() {
 			tvTop.SetBorder(true).SetTitle(" Top cryptos by mcap (8s) ")
 			tvStable := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoStablecoins(baseURL))
 			tvStable.SetBorder(true).SetTitle(" Stablecoins ")
-			tvGainersLosers := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoGainersLosers(baseURL, true))
+			tvGainersLosers := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoGainersLosers(baseURL, true, 0, gainersLosersPerPage))
 			tvGainersLosers.SetBorder(true).SetTitle(" Crypto gainers (10s) ")
 			tvNews := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoNews(baseURL))
 			tvNews.SetBorder(true).SetTitle(" Crypto News ")
@@ -912,10 +946,11 @@ func main() {
 		vGainersLosers := cryptoSubpanelViews[2]
 		vNews := cryptoSubpanelViews[3]
 		vBtc := cryptoSubpanelViews[4]
-		// Top Cryptos: static title "Top cryptos by mcap (8s)", 8s per page; lines per page from panel height (resolution-aware)
+		// Top Cryptos: 56 coins; 8s per page; lines per page from panel height (resolution-aware)
 		go func() {
+			const topCoinsCount = 56
 			perPage := 11
-			rangeStarts := []int{1, 12, 23}
+			rangeStarts := []int{1, 12, 23, 34, 45}
 			pageIndex := 0
 			secondsLeft := 8
 			refreshContent := func() {
@@ -935,7 +970,7 @@ func main() {
 				}
 				if received >= 5 && received <= 25 {
 					perPage = received
-					numPages := (33 + perPage - 1) / perPage
+					numPages := (topCoinsCount + perPage - 1) / perPage
 					rangeStarts = make([]int, numPages)
 					for i := 0; i < numPages; i++ {
 						rangeStarts[i] = i*perPage + 1
@@ -969,17 +1004,65 @@ func main() {
 				})
 			}
 		}()
-		// Stablecoins: refresh every 6s with timer in title
+		// Stablecoins: cycle pages like Top Cryptos (8s per page), ticker only, 2 decimals, one line per coin
 		go func() {
-			stableSecs := 6
+			stableSecs := 8
 			secondsLeft := stableSecs
+			pageIndex := 0
+			perPage := 4
+			var lastData *cryptoStablecoinsResp
 			refreshStable := func() {
-				c := renderCryptoStablecoins(baseURL)
-				title := fmt.Sprintf(" Stablecoins (%ds) ", secondsLeft)
+				ch := make(chan int, 1)
 				app.QueueUpdateDraw(func() {
-					vStable.SetTitle(title)
-					vStable.SetText(c)
+					_, _, _, h := vStable.GetRect()
+					if h > 6 {
+						// header 2 + 2 lines per coin (status + mcap/vol)
+						p := (h - 4) / 2
+						if p >= 1 && p <= 20 {
+							ch <- p
+						} else {
+							ch <- perPage
+						}
+					} else {
+						ch <- perPage
+					}
+					close(ch)
 				})
+				if v, ok := <-ch; ok && v >= 1 && v <= 20 {
+					perPage = v
+				}
+				var d cryptoStablecoinsResp
+				if err := fetchJSON(baseURL, "/panels/crypto/stablecoins", &d); err == nil && d.Status == "ok" && len(d.Coins) > 0 {
+					lastData = &d
+					n := len(d.Coins)
+					numPages := (n + perPage - 1) / perPage
+					if numPages < 1 {
+						numPages = 1
+					}
+					pageIndex = pageIndex % numPages
+					pageStart := pageIndex * perPage
+					c := renderCryptoStablecoinsPageFromData(lastData, pageStart, perPage)
+					title := fmt.Sprintf(" Stablecoins (%ds) ", secondsLeft)
+					app.QueueUpdateDraw(func() {
+						vStable.SetTitle(title)
+						vStable.SetText(c)
+					})
+					pageIndex = (pageIndex + 1) % numPages
+				} else if lastData != nil {
+					n := len(lastData.Coins)
+					numPages := (n + perPage - 1) / perPage
+					if numPages < 1 {
+						numPages = 1
+					}
+					pageIndex = pageIndex % numPages
+					pageStart := pageIndex * perPage
+					c := renderCryptoStablecoinsPageFromData(lastData, pageStart, perPage)
+					app.QueueUpdateDraw(func() {
+						vStable.SetTitle(fmt.Sprintf(" Stablecoins (%ds) ", secondsLeft))
+						vStable.SetText(c)
+					})
+					pageIndex = (pageIndex + 1) % numPages
+				}
 			}
 			refreshStable()
 			ticker := time.NewTicker(1 * time.Second)
@@ -996,13 +1079,18 @@ func main() {
 				})
 			}
 		}()
-		// Gainers/Losers: cycle every 10s between gainers (green) and losers (red)
+		// Gainers/Losers: 12 per page; cycle gainers p0 → gainers p1 → losers p0 → losers p1 every 10s; show change % next to price
 		go func() {
 			gainersSecs := 10
 			secondsLeft := gainersSecs
-			showGainers := true
+			phase := 0 // 0 = gainers 0-11, 1 = gainers 12-23, 2 = losers 0-11, 3 = losers 12-23
 			refreshGL := func() {
-				c := renderCryptoGainersLosers(baseURL, showGainers)
+				showGainers := phase < 2
+				pageStart := 0
+				if phase == 1 || phase == 3 {
+					pageStart = gainersLosersPerPage
+				}
+				c := renderCryptoGainersLosers(baseURL, showGainers, pageStart, gainersLosersPerPage)
 				label := "gainers"
 				if !showGainers {
 					label = "losers"
@@ -1012,6 +1100,7 @@ func main() {
 					vGainersLosers.SetTitle(title)
 					vGainersLosers.SetText(c)
 				})
+				phase = (phase + 1) % 4
 			}
 			refreshGL()
 			ticker := time.NewTicker(1 * time.Second)
@@ -1020,12 +1109,13 @@ func main() {
 				secondsLeft--
 				if secondsLeft <= 0 {
 					secondsLeft = gainersSecs
-					showGainers = !showGainers
 					refreshGL()
 					continue
 				}
+				// Title reflects current content (phase was already advanced in refreshGL)
+				displayPhase := (phase + 3) % 4
 				label := "gainers"
-				if !showGainers {
+				if displayPhase >= 2 {
 					label = "losers"
 				}
 				app.QueueUpdateDraw(func() {
