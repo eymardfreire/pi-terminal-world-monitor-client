@@ -286,7 +286,7 @@ def global_situation_map():
 # --- Crypto panel (CoinGecko free API; no key) ---
 
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
-STABLECOIN_IDS = "tether,usd-coin,binance-usd,dai,ethena-usde,frax,frax-share,tusd"
+STABLECOIN_IDS = "tether,usd-coin,binance-usd,dai,ethena-usde,frax,frax-share,tusd,first-digital-usd"
 
 
 def _fetch_coingecko_markets(
@@ -382,8 +382,8 @@ def crypto_top(range_start: int = 1, per_page: int = 11):
 
 @router.get("/crypto/stablecoins")
 def crypto_stablecoins():
-    """Stablecoins: status (healthy if all on peg), market cap, volume, per-coin peg health."""
-    raw = _fetch_coingecko_markets(per_page=20, ids=STABLECOIN_IDS)
+    """Stablecoins: status (healthy if all on peg), market cap, volume, per-coin peg health + supply/volume/24h chg."""
+    raw = _fetch_coingecko_markets(per_page=20, ids=STABLECOIN_IDS, price_change="24h")
     if not raw:
         return {
             "status": "ok",
@@ -403,12 +403,18 @@ def crypto_stablecoins():
         on_peg = dev <= 0.5
         if not on_peg:
             all_on_peg = False
+        mcap = c.get("market_cap") or 0
+        vol = c.get("total_volume") or 0
+        p24 = c.get("price_change_percentage_24h")
         coins_out.append({
             "symbol": (c.get("symbol") or "").upper(),
             "name": c.get("name", ""),
             "price": round(price, 4),
             "peg_status": "ON PEG" if on_peg else "OFF PEG",
             "deviation_pct": round(dev, 2),
+            "market_cap_b": round(mcap / 1e9, 1) if mcap else None,
+            "volume_b": round(vol / 1e9, 3) if vol else None,
+            "price_change_24h_pct": round(p24, 2) if p24 is not None else None,
         })
     return {
         "status": "ok",
@@ -418,6 +424,51 @@ def crypto_stablecoins():
         "volume_b": round(total_vol / 1e9, 1),
         "coins": coins_out,
     }
+
+
+GAINERS_LOSERS_COUNT = 28
+
+
+def _fetch_gainers_losers() -> dict[str, Any]:
+    """Top 28 gainers and top 28 losers by 24h price change (exclude stablecoins)."""
+    cache_key = "gainers_losers"
+    if cache_key in _crypto_cache:
+        return _crypto_cache[cache_key]
+    # Fetch more than 56 so we have enough after excluding stables
+    raw = _fetch_coingecko_markets(per_page=100, price_change="24h")
+    if not raw:
+        out = {"status": "ok", "source": "coingecko", "gainers": [], "losers": []}
+        _crypto_cache[cache_key] = out
+        return out
+    # Exclude stablecoins (price near 1)
+    non_stable = [c for c in raw if c.get("current_price") is not None and abs((c.get("current_price") or 0) - 1.0) > 0.05]
+    # Sort by 24h change descending (gainers first)
+    non_stable.sort(key=lambda x: (x.get("price_change_percentage_24h") or -1e9), reverse=True)
+    gainers = []
+    for c in non_stable[:GAINERS_LOSERS_COUNT]:
+        gainers.append({
+            "symbol": (c.get("symbol") or "").upper(),
+            "price": round(c.get("current_price") or 0, 4),
+        })
+    losers = []
+    for c in non_stable[-GAINERS_LOSERS_COUNT:]:
+        losers.append({
+            "symbol": (c.get("symbol") or "").upper(),
+            "price": round(c.get("current_price") or 0, 4),
+        })
+    losers.reverse()  # worst first
+    out = {"status": "ok", "source": "coingecko", "gainers": gainers, "losers": losers}
+    _crypto_cache[cache_key] = out
+    return out
+
+
+@router.get("/crypto/gainers-losers")
+def crypto_gainers_losers():
+    """Top 28 gainers and top 28 losers by 24h price change (ticker + price)."""
+    try:
+        return _fetch_gainers_losers()
+    except Exception:
+        return {"status": "error", "source": "coingecko", "gainers": [], "losers": []}
 
 
 # Crypto news: public RSS (no API key); no trailing slash to avoid 308 redirect

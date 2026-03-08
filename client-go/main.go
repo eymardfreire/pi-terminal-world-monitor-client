@@ -96,19 +96,33 @@ type cryptoTopResp struct {
 }
 
 type cryptoStablecoin struct {
-	Symbol       string  `json:"symbol"`
-	Name         string  `json:"name"`
-	Price        float64 `json:"price"`
-	PegStatus    string  `json:"peg_status"`
-	DeviationPct float64 `json:"deviation_pct"`
+	Symbol           string   `json:"symbol"`
+	Name             string   `json:"name"`
+	Price            float64  `json:"price"`
+	PegStatus        string   `json:"peg_status"`
+	DeviationPct     float64  `json:"deviation_pct"`
+	MarketCapB       *float64 `json:"market_cap_b"`
+	VolumeB          *float64 `json:"volume_b"`
+	PriceChange24hPct *float64 `json:"price_change_24h_pct"`
 }
 
 type cryptoStablecoinsResp struct {
-	Status      string              `json:"status"`
-	StatusLabel string              `json:"status_label"`
-	MarketCapB  *float64            `json:"market_cap_b"`
-	VolumeB     *float64            `json:"volume_b"`
-	Coins       []cryptoStablecoin  `json:"coins"`
+	Status      string             `json:"status"`
+	StatusLabel string             `json:"status_label"`
+	MarketCapB  *float64           `json:"market_cap_b"`
+	VolumeB     *float64           `json:"volume_b"`
+	Coins       []cryptoStablecoin `json:"coins"`
+}
+
+type cryptoGainersLosersEntry struct {
+	Symbol string  `json:"symbol"`
+	Price  float64 `json:"price"`
+}
+
+type cryptoGainersLosersResp struct {
+	Status  string                     `json:"status"`
+	Gainers []cryptoGainersLosersEntry `json:"gainers"`
+	Losers  []cryptoGainersLosersEntry `json:"losers"`
 }
 
 // BTC ETF Tracker: header (Net Flow, Est. Flow, Total Vol, ETFs) + table rows
@@ -372,6 +386,17 @@ func renderCryptoTop(baseURL string, rangeStart int) string {
 	return content
 }
 
+// formatStableVol formats volume for stablecoins: 54.7B or 132M
+func formatStableVol(b *float64) string {
+	if b == nil || *b == 0 {
+		return "—"
+	}
+	if *b >= 1 {
+		return fmt.Sprintf("$%.1fB", *b)
+	}
+	return fmt.Sprintf("$%.0fM", *b*1000)
+}
+
 func renderCryptoStablecoins(baseURL string) string {
 	var d cryptoStablecoinsResp
 	if err := fetchJSON(baseURL, "/panels/crypto/stablecoins", &d); err != nil {
@@ -385,17 +410,68 @@ func renderCryptoStablecoins(baseURL string) string {
 	if d.StatusLabel != "Healthy" {
 		statusTag = "[yellow]"
 	}
-	b.WriteString(fmt.Sprintf(" %s%s[-]\n", statusTag, d.StatusLabel))
+	b.WriteString(fmt.Sprintf(" %s%s[-]", statusTag, d.StatusLabel))
 	if d.MarketCapB != nil && d.VolumeB != nil {
-		b.WriteString(fmt.Sprintf(" MCap: $%.1fB  Vol: $%.1fB\n", *d.MarketCapB, *d.VolumeB))
+		b.WriteString(fmt.Sprintf("  MCap: $%.1fB | Vol: $%.1fB", *d.MarketCapB, *d.VolumeB))
 	}
-	b.WriteString(" [gray]PEG HEALTH[-]\n")
+	b.WriteString("\n\n [::b]PEG HEALTH[-]\n")
 	for _, c := range d.Coins {
 		pegTag := "[green]"
 		if c.PegStatus != "ON PEG" {
 			pegTag = "[red]"
 		}
-		b.WriteString(fmt.Sprintf("  %s $%.4f %s%s[-] %+.2f%%\n", c.Symbol, c.Price, pegTag, c.PegStatus, c.DeviationPct))
+		b.WriteString(fmt.Sprintf("  [::b]%s[-] %s  $%.4f  %s%s[-] %.2f%%\n", c.Symbol, c.Name, c.Price, pegTag, c.PegStatus, c.DeviationPct))
+	}
+	b.WriteString("\n [::b]SUPPLY & VOLUME[-]\n")
+	for _, c := range d.Coins {
+		mcapStr := "—"
+		if c.MarketCapB != nil {
+			if *c.MarketCapB >= 1 {
+				mcapStr = fmt.Sprintf("$%.1fB", *c.MarketCapB)
+			} else {
+				mcapStr = fmt.Sprintf("$%.0fM", *c.MarketCapB*1000)
+			}
+		}
+		volStr := formatStableVol(c.VolumeB)
+		chgStr := "—"
+		if c.PriceChange24hPct != nil {
+			chgStr = fmt.Sprintf("%+.2f%%", *c.PriceChange24hPct)
+		}
+		chgTag := "[green]"
+		if c.PriceChange24hPct != nil && *c.PriceChange24hPct < 0 {
+			chgTag = "[red]"
+		}
+		b.WriteString(fmt.Sprintf("  [::b]%s[-]  %s  %s  %s%s[-]\n", c.Symbol, mcapStr, volStr, chgTag, chgStr))
+	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+func renderCryptoGainersLosers(baseURL string, showGainers bool) string {
+	var d cryptoGainersLosersResp
+	if err := fetchJSON(baseURL, "/panels/crypto/gainers-losers", &d); err != nil {
+		return "No data"
+	}
+	if d.Status != "ok" {
+		return "No data"
+	}
+	list := d.Losers
+	tag := "[red]"
+	title := "Losers"
+	if showGainers {
+		list = d.Gainers
+		tag = "[green]"
+		title = "Gainers"
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf(" [::b]Crypto %s[-]\n\n", title))
+	for _, e := range list {
+		priceStr := fmt.Sprintf("%.4f", e.Price)
+		if e.Price >= 1000 {
+			priceStr = fmt.Sprintf("%.2f", e.Price)
+		} else if e.Price >= 1 {
+			priceStr = fmt.Sprintf("%.2f", e.Price)
+		}
+		b.WriteString(fmt.Sprintf("  %s%-8s[-] $%s\n", tag, e.Symbol, priceStr))
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
@@ -507,66 +583,97 @@ func wrapLines(s string, width int) []string {
 	return lines
 }
 
-// renderCryptoNewsWithSize renders crypto news with headline + blurb per article, filling the panel (width x contentHeight).
-func renderCryptoNewsWithSize(baseURL string, width, contentHeight int) string {
+// fetchCryptoNewsItems returns the current news items from the API (for cycling in the Crypto News panel).
+func fetchCryptoNewsItems(baseURL string) ([]cryptoNewsItem, error) {
+	var d cryptoNewsResp
+	if err := fetchJSON(baseURL, "/panels/crypto/news", &d); err != nil {
+		return nil, err
+	}
+	if d.Status != "ok" || len(d.Items) == 0 {
+		return nil, nil
+	}
+	return d.Items, nil
+}
+
+// renderCryptoNewsOneArticle appends one article (headline wrapped, no truncation + blurb) into b, up to maxLines. Returns lines used.
+func renderCryptoNewsOneArticle(b *strings.Builder, it *cryptoNewsItem, width, maxLines int) int {
+	if maxLines <= 0 {
+		return 0
+	}
+	indent := "  "
+	// Headline: wrap to width (no ellipsis), allow multiple lines
+	titleLines := wrapLines(strings.TrimSpace(it.Title), width-2)
+	maxTitleLines := 2
+	if maxTitleLines > maxLines-2 {
+		maxTitleLines = maxLines - 2 // need at least 1 blank + 1 blurb
+	}
+	linesUsed := 0
+	for i, w := range titleLines {
+		if i >= maxTitleLines {
+			break
+		}
+		b.WriteString(indent)
+		b.WriteString(w)
+		b.WriteString("\n")
+		linesUsed++
+	}
+	b.WriteString("\n")
+	linesUsed++
+	if linesUsed >= maxLines {
+		return linesUsed
+	}
+	blurb := it.Description
+	if blurb == "" {
+		blurb = "—"
+	}
+	wrapped := wrapLines(blurb, width-2)
+	remaining := maxLines - linesUsed
+	for i, w := range wrapped {
+		if i >= remaining {
+			break
+		}
+		b.WriteString(indent)
+		b.WriteString(w)
+		b.WriteString("\n")
+		linesUsed++
+	}
+	return linesUsed
+}
+
+// renderCryptoNewsTwoItems renders two headlines + descriptions per cycle with a separator between them.
+// Headlines wrap to width (no truncation). Advances by 2 items per page.
+func renderCryptoNewsTwoItems(items []cryptoNewsItem, pageIndex, width, contentHeight int) string {
 	if contentHeight <= 0 {
 		contentHeight = 20
 	}
 	if width <= 0 {
 		width = 60
 	}
-	var d cryptoNewsResp
-	if err := fetchJSON(baseURL, "/panels/crypto/news", &d); err != nil {
-		return "No data"
-	}
-	if d.Status != "ok" || len(d.Items) == 0 {
+	if len(items) == 0 {
 		return "No headlines"
 	}
-	var b strings.Builder
-	linesUsed := 0
-	for _, it := range d.Items {
-		if linesUsed >= contentHeight {
-			break
-		}
-		// Headline (one line, truncate to width)
-		title := it.Title
-		if len([]rune(title)) > width {
-			title = string([]rune(title)[:width-3]) + "..."
-		}
-		b.WriteString("  ")
-		b.WriteString(title)
-		b.WriteString("\n\n")
-		linesUsed += 2
-		if linesUsed >= contentHeight {
-			break
-		}
-		// Blurb: wrap description to fill remaining space
-		blurb := it.Description
-		if blurb == "" {
-			blurb = "—"
-		}
-		wrapped := wrapLines(blurb, width-2) // indent 2 spaces
-		remaining := contentHeight - linesUsed
-		for i, w := range wrapped {
-			if i >= remaining {
-				break
-			}
-			b.WriteString("  ")
-			b.WriteString(w)
-			b.WriteString("\n")
-			linesUsed++
-		}
-		// One blank line between articles if space
-		if linesUsed < contentHeight {
-			b.WriteString("\n")
-			linesUsed++
-		}
+	n := len(items)
+	idx0 := pageIndex % n
+	if idx0 < 0 {
+		idx0 += n
 	}
+	idx1 := (pageIndex + 1) % n
+	sepLines := 2 // em dash line + one blank below
+	half := (contentHeight - sepLines) / 2
+	if half < 3 {
+		half = 3
+	}
+	var b strings.Builder
+	lines1 := renderCryptoNewsOneArticle(&b, &items[idx0], width, half)
+	b.WriteString("\n  —\n") // em dash, one blank below
+	lines2 := renderCryptoNewsOneArticle(&b, &items[idx1], width, contentHeight-half-sepLines)
+	_, _ = lines1, lines2
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
 func renderCryptoNews(baseURL string) string {
-	return renderCryptoNewsWithSize(baseURL, 60, 24)
+	items, _ := fetchCryptoNewsItems(baseURL)
+	return renderCryptoNewsTwoItems(items, 0, 60, 24)
 }
 
 // renderCrypto is used only when crypto is a single panel (legacy); prefer crypto 3-subpanel layout.
@@ -695,26 +802,31 @@ func main() {
 		SetRows(gridRows...).
 		SetBorders(false)
 
-	// One TextView per cell (or a Flex for crypto with 4 sub-panels in 2×2)
+	// One TextView per cell (or a Flex for crypto with 5 sub-panels: Top | Stable+GainersLosers; News | BTC ETF)
 	textViews := make([]*tview.TextView, n)
-	var cryptoSubpanelViews [4]*tview.TextView
+	var cryptoSubpanelViews [5]*tview.TextView
 	for i := 0; i < n; i++ {
 		key := panels[i]
 		row, col := i/cols, i%cols
 		if key == "crypto" {
-			// Crypto: 4 bordered sub-panels in 2×2 (Top Cryptos | Stable Coins; Crypto News | BTC ETF)
+			// Crypto: Top | (Stablecoins | Gainers/Losers); Crypto News | BTC ETF
 			tvTop := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoTop(baseURL, 1))
 			tvTop.SetBorder(true).SetTitle(" Top cryptos by mcap (8s) ")
 			tvStable := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoStablecoins(baseURL))
 			tvStable.SetBorder(true).SetTitle(" Stablecoins ")
+			tvGainersLosers := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoGainersLosers(baseURL, true))
+			tvGainersLosers.SetBorder(true).SetTitle(" Crypto gainers (10s) ")
 			tvNews := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoNews(baseURL))
 			tvNews.SetBorder(true).SetTitle(" Crypto News ")
 			tvBtc := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoBtcEtfAll(baseURL))
 			tvBtc.SetBorder(true).SetTitle(" BTC ETF Tracker (6s) ")
-			cryptoSubpanelViews[0], cryptoSubpanelViews[1], cryptoSubpanelViews[2], cryptoSubpanelViews[3] = tvTop, tvStable, tvNews, tvBtc
+			cryptoSubpanelViews[0], cryptoSubpanelViews[1], cryptoSubpanelViews[2], cryptoSubpanelViews[3], cryptoSubpanelViews[4] = tvTop, tvStable, tvGainersLosers, tvNews, tvBtc
+			stableGainersFlex := tview.NewFlex().SetDirection(tview.FlexColumn).
+				AddItem(tvStable, 0, 1, false).
+				AddItem(tvGainersLosers, 0, 1, false)
 			topRow := tview.NewFlex().SetDirection(tview.FlexColumn).
 				AddItem(tvTop, 0, 1, false).
-				AddItem(tvStable, 0, 1, false)
+				AddItem(stableGainersFlex, 0, 1, false)
 			botRow := tview.NewFlex().SetDirection(tview.FlexColumn).
 				AddItem(tvNews, 0, 1, false).
 				AddItem(tvBtc, 0, 1, false)
@@ -793,12 +905,13 @@ func main() {
 		}()
 	}
 
-	// Crypto panel: 4 sub-panels with individual timers. Top Cryptos: 33 coins, 11 per page (1-11, 12-22, 23-33), 16s per page, title from API.
+	// Crypto panel: 5 sub-panels. Top | (Stablecoins | Gainers/Losers); News | BTC ETF.
 	if cryptoPanelIndex >= 0 && cryptoSubpanelViews[0] != nil {
 		vTop := cryptoSubpanelViews[0]
 		vStable := cryptoSubpanelViews[1]
-		vNews := cryptoSubpanelViews[2]
-		vBtc := cryptoSubpanelViews[3]
+		vGainersLosers := cryptoSubpanelViews[2]
+		vNews := cryptoSubpanelViews[3]
+		vBtc := cryptoSubpanelViews[4]
 		// Top Cryptos: static title "Top cryptos by mcap (8s)", 8s per page; lines per page from panel height (resolution-aware)
 		go func() {
 			perPage := 11
@@ -856,22 +969,82 @@ func main() {
 				})
 			}
 		}()
-		// Stablecoins: refresh every 6s
+		// Stablecoins: refresh every 6s with timer in title
 		go func() {
-			ticker := time.NewTicker(6 * time.Second)
+			stableSecs := 6
+			secondsLeft := stableSecs
+			refreshStable := func() {
+				c := renderCryptoStablecoins(baseURL)
+				title := fmt.Sprintf(" Stablecoins (%ds) ", secondsLeft)
+				app.QueueUpdateDraw(func() {
+					vStable.SetTitle(title)
+					vStable.SetText(c)
+				})
+			}
+			refreshStable()
+			ticker := time.NewTicker(1 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
-				c := renderCryptoStablecoins(baseURL)
-				app.QueueUpdateDraw(func() { vStable.SetText(c) })
+				secondsLeft--
+				if secondsLeft <= 0 {
+					secondsLeft = stableSecs
+					refreshStable()
+					continue
+				}
+				app.QueueUpdateDraw(func() {
+					vStable.SetTitle(fmt.Sprintf(" Stablecoins (%ds) ", secondsLeft))
+				})
 			}
 		}()
-		// Crypto News: refresh every 6s; use panel size to fill with headline + blurb
+		// Gainers/Losers: cycle every 10s between gainers (green) and losers (red)
 		go func() {
-			doRefresh := func() {
+			gainersSecs := 10
+			secondsLeft := gainersSecs
+			showGainers := true
+			refreshGL := func() {
+				c := renderCryptoGainersLosers(baseURL, showGainers)
+				label := "gainers"
+				if !showGainers {
+					label = "losers"
+				}
+				title := fmt.Sprintf(" Crypto %s (%ds) ", label, secondsLeft)
+				app.QueueUpdateDraw(func() {
+					vGainersLosers.SetTitle(title)
+					vGainersLosers.SetText(c)
+				})
+			}
+			refreshGL()
+			ticker := time.NewTicker(1 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				secondsLeft--
+				if secondsLeft <= 0 {
+					secondsLeft = gainersSecs
+					showGainers = !showGainers
+					refreshGL()
+					continue
+				}
+				label := "gainers"
+				if !showGainers {
+					label = "losers"
+				}
+				app.QueueUpdateDraw(func() {
+					vGainersLosers.SetTitle(fmt.Sprintf(" Crypto %s (%ds) ", label, secondsLeft))
+				})
+			}
+		}()
+		// Crypto News: one headline + article per page, 20s cycle; timer in title; pool refresh every 6s
+		go func() {
+			newsSecs := 20
+			secondsLeft := newsSecs
+			pageIndex := 0
+			items, _ := fetchCryptoNewsItems(baseURL)
+			tickCount := 0
+
+			refreshContent := func() {
 				ch := make(chan struct{ w, h int }, 1)
 				app.QueueUpdateDraw(func() {
-					x, y, w, h := vNews.GetRect()
-					_, _ = x, y
+					_, _, w, h := vNews.GetRect()
 					if w < 20 {
 						w = 60
 					}
@@ -882,14 +1055,52 @@ func main() {
 					close(ch)
 				})
 				size := <-ch
-				c := renderCryptoNewsWithSize(baseURL, size.w, size.h)
-				app.QueueUpdateDraw(func() { vNews.SetText(c) })
+				n := len(items)
+				if n > 0 {
+					if pageIndex >= n {
+						pageIndex = 0
+					}
+					c := renderCryptoNewsTwoItems(items, pageIndex, size.w, size.h)
+					title := fmt.Sprintf(" Crypto News (%ds) ", secondsLeft)
+					app.QueueUpdateDraw(func() {
+						vNews.SetTitle(title)
+						vNews.SetText(c)
+					})
+				} else {
+					app.QueueUpdateDraw(func() {
+						vNews.SetTitle(" Crypto News ")
+						vNews.SetText("No headlines")
+					})
+				}
 			}
-			doRefresh() // initial fill with real size
-			ticker := time.NewTicker(6 * time.Second)
+
+			refreshContent()
+			ticker := time.NewTicker(1 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
-				doRefresh()
+				tickCount++
+				// Refresh pool every 6s
+				if tickCount%6 == 0 {
+					if newItems, err := fetchCryptoNewsItems(baseURL); err == nil && len(newItems) > 0 {
+						items = newItems
+						if pageIndex >= len(items) {
+							pageIndex = 0
+						}
+					}
+				}
+				secondsLeft--
+				if secondsLeft <= 0 {
+					secondsLeft = newsSecs
+					if len(items) > 0 {
+						pageIndex = (pageIndex + 2) % len(items)
+					}
+					refreshContent()
+					continue
+				}
+				title := fmt.Sprintf(" Crypto News (%ds) ", secondsLeft)
+				app.QueueUpdateDraw(func() {
+					vNews.SetTitle(title)
+				})
 			}
 		}()
 		// BTC ETF Tracker: show all ETFs at once, refresh every 6s, live countdown in title

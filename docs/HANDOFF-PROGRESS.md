@@ -36,7 +36,7 @@ Use this document to continue development with a new agent or session. It summar
   - Unchanged: 6s refresh; no paging.
 
 - **Crypto News**  
-  - **Real data:** Backend returns `description` (blurb) per item from RSS. Panel shows **headline**, then a blank line, then **description/blurb** word-wrapped to panel width. Layout fills the panel: `renderCryptoNewsWithSize(baseURL, width, contentHeight)` uses panel rect (from `vNews.GetRect()` on refresh); multiple articles shown with as much blurb as fits. 6s refresh; initial draw uses actual panel size.
+  - **Two headlines + descriptions per cycle:** Each page shows two articles (headline + blurb each), with a **separator line** (`───…`) between them. Headlines **wrap** to panel width (no truncation with "..."). **20s timer** in title; pool refresh every 6s. Uses `renderCryptoNewsTwoItems()` and `renderCryptoNewsOneArticle()`; advances by 2 items per cycle.
 
 - **BTC ETF Tracker sub-panel**  
   - **All ETFs at once:** No paging; `renderCryptoBtcEtfAll(baseURL)` renders header + full `etfs[]` list.  
@@ -72,11 +72,12 @@ Use this document to continue development with a new agent or session. It summar
 - **Go client (recommended)**  
   - **Build:** `cd client-go && go mod tidy && go build -o pi-world-monitor-client .`  
   - **Env:** `BACKEND_URL`, `CYCLE_SECONDS` (default 8), `GRID_COLS` / `GRID_ROWS` (default 2×2). Press **Q** to quit.  
-  - **Crypto panel (top-left slot):** 4 sub-panels in **2×2**:  
-    1. **Top Cryptos** – Static title “Top cryptos by mcap (8s)”, 8s cycle, **resolution-aware** (lines per page from panel height), 33 coins in rotation.  
-    2. **Stablecoins** – 6s refresh.  
-    3. **Crypto News** – 6s refresh.  
-    4. **BTC ETF Tracker** – All ETFs at once, 6s refresh, title “BTC ETF Tracker (6s)” with countdown; fixed-width columns.  
+  - **Crypto panel (top-left slot):** 5 sub-panels. **Top row:** Top Cryptos | (Stablecoins | Gainers/Losers). **Bottom row:** Crypto News | BTC ETF.  
+    1. **Top Cryptos** – 8s cycle, resolution-aware, 33 coins in rotation.  
+    2. **Stablecoins** – **Timer in title** (6s); HEALTHY/Caution, MCap | Vol; **PEG HEALTH** (symbol, name, price, ON PEG %); **SUPPLY & VOLUME** (symbol, MCap, 24h Vol, 24h Chg green/red).  
+    3. **Crypto gainers / losers** – **Cycle every 10s** between “Crypto gainers” and “Crypto losers”; 28 each, ticker + price; **green** for gainers, **red** for losers; timer in title.  
+    4. **Crypto News** – 20s cycle, two articles per page, em dash separator.  
+    5. **BTC ETF Tracker** – 6s refresh, countdown in title; fixed-width columns.  
   - Weather Watch, Global Situation Map, World Clock unchanged; all use QueueUpdateDraw.
 
 - **Python client**  
@@ -157,7 +158,10 @@ If the backend is managed by systemd: `systemctl restart pi-world-monitor` (or t
   Single internal fetch of 33; slice by `range_start` and `per_page` (5–25).
 
 - **`GET /panels/crypto/stablecoins`**  
-  `{ "status", "status_label", "market_cap_b", "volume_b", "coins": [ { "symbol", "name", "price", "peg_status", "deviation_pct" } ] }`
+  `{ "status", "status_label", "market_cap_b", "volume_b", "coins": [ { "symbol", "name", "price", "peg_status", "deviation_pct", "market_cap_b", "volume_b", "price_change_24h_pct" } ] }` — PEG HEALTH + SUPPLY & VOLUME layout.
+
+- **`GET /panels/crypto/gainers-losers`**  
+  `{ "status", "gainers": [ { "symbol", "price" } ], "losers": [ { "symbol", "price" } ] }` — 28 gainers and 28 losers by 24h change (from top 100 mcap, excluding stablecoins).
 
 - **`GET /panels/crypto/news`**  
   `{ "status", "source": "rss", "items": [ { "title", "link", "pub_date", "description" } ] }` — `description` is the article blurb from RSS.
