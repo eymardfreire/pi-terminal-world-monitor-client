@@ -67,6 +67,46 @@ curl -s http://209.38.141.129:8000/panels/world-clock
 
 ---
 
+## Deploy workflow: push and restart backend
+
+Whenever backend or client code changes and the user needs to deploy:
+
+**1. Local (your machine): commit and push with a relevant commit message**
+
+Use a **specific** message that describes what changed (e.g. "Add 1h/7d price change to crypto top panel", "Crypto panel: 11 per page, 3 panels, live timer"), not generic text like "Updates" or "Fix".
+
+```bash
+cd /path/to/pi-terminal-world-monitor-client
+git add -A
+git status   # optional: review what will be committed
+git commit -m "Your specific commit message here"
+git push origin main
+```
+
+Use your actual branch name if not `main` (e.g. `master`).
+
+**2. VPS: pull and restart the backend**
+
+SSH in, then from the repo root:
+
+```bash
+cd /opt/pi-terminal-world-monitor-client && git pull && cd backend && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+If uvicorn is already running in the foreground, stop it with **Ctrl+C**, then run the line above again.
+
+If the backend runs under systemd, restart the service instead:
+
+```bash
+cd /opt/pi-terminal-world-monitor-client && git pull && systemctl restart pi-world-monitor
+```
+
+(Replace `pi-world-monitor` with the actual service name from `contrib/systemd/` if different.)
+
+**Rule for agents:** When you make changes that require the user to push and restart the backend, always provide these two command blocks and **suggest a concrete commit message** based on the change.
+
+---
+
 ## Repo layout
 
 | Path | Purpose |

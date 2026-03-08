@@ -287,8 +287,10 @@ COINGECKO_BASE = "https://api.coingecko.com/api/v3"
 STABLECOIN_IDS = "tether,usd-coin,binance-usd,dai,ethena-usde,frax,frax-share,tusd"
 
 
-def _fetch_coingecko_markets(page: int = 1, per_page: int = 24, ids: str | None = None) -> list[dict[str, Any]]:
-    cache_key = f"markets_p{page}_n{per_page}_{ids or 'all'}"
+def _fetch_coingecko_markets(
+    page: int = 1, per_page: int = 24, ids: str | None = None, price_change: str = "1h,24h,7d"
+) -> list[dict[str, Any]]:
+    cache_key = f"markets_p{page}_n{per_page}_{ids or 'all'}_{price_change}"
     if cache_key in _crypto_cache:
         return _crypto_cache[cache_key]
     try:
@@ -297,6 +299,7 @@ def _fetch_coingecko_markets(page: int = 1, per_page: int = 24, ids: str | None 
             "order": "market_cap_desc",
             "per_page": per_page,
             "page": page,
+            "price_change_percentage": price_change,
         }
         if ids:
             params["ids"] = ids
@@ -312,27 +315,29 @@ def _fetch_coingecko_markets(page: int = 1, per_page: int = 24, ids: str | None 
 
 @router.get("/crypto/top")
 def crypto_top(range_start: int = 1):
-    """Top 30 cryptos by market cap, 10 per page. range_start=1 → 1-10, 11 → 11-20, 21 → 21-30. Price, 24h%, 7d% (if available)."""
-    # Normalize to one of 1, 11, 21
-    if range_start <= 10:
-        page, per_page = 1, 10
-    elif range_start <= 20:
-        page, per_page = 2, 10
+    """Top 33 cryptos by market cap, 11 per page. range_start=1 → 1-11, 12 → 12-22, 23 → 23-33. Price, 1h%, 24h%, 7d%."""
+    # Normalize to one of 1, 12, 23 (11 per page, 3 panels)
+    if range_start <= 11:
+        page, per_page = 1, 11
+    elif range_start <= 22:
+        page, per_page = 2, 11
     else:
-        page, per_page = 3, 10
+        page, per_page = 3, 11
     raw = _fetch_coingecko_markets(page=page, per_page=per_page)
     coins = []
     for i, c in enumerate(raw):
         rank = (page - 1) * per_page + i + 1
         price = c.get("current_price")
+        p1h = c.get("price_change_percentage_1h_in_currency") or c.get("price_change_percentage_1h")
         p24 = c.get("price_change_percentage_24h")
-        p7d = c.get("price_change_percentage_7d_in_currency")
+        p7d = c.get("price_change_percentage_7d_in_currency") or c.get("price_change_percentage_7d")
         coins.append({
             "rank": rank,
             "id": c.get("id"),
             "symbol": (c.get("symbol") or "").upper(),
             "name": c.get("name", ""),
             "price": round(price, 4) if price is not None else None,
+            "price_1h_pct": round(p1h, 2) if p1h is not None else None,
             "price_24h_pct": round(p24, 2) if p24 is not None else None,
             "price_7d_pct": round(p7d, 2) if p7d is not None else None,
         })

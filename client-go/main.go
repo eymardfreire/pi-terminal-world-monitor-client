@@ -84,6 +84,7 @@ type cryptoCoin struct {
 	Symbol      string   `json:"symbol"`
 	Name        string   `json:"name"`
 	Price       float64  `json:"price"`
+	Price1hPct  *float64 `json:"price_1h_pct"`
 	Price24hPct *float64 `json:"price_24h_pct"`
 	Price7dPct  *float64 `json:"price_7d_pct"`
 }
@@ -328,6 +329,10 @@ func renderCryptoTop(baseURL string, rangeStart int) string {
 	}
 	var b strings.Builder
 	for _, c := range d.Coins {
+		p1h := "—"
+		if c.Price1hPct != nil {
+			p1h = fmt.Sprintf("%+.2f%%", *c.Price1hPct)
+		}
 		p24 := "—"
 		if c.Price24hPct != nil {
 			p24 = fmt.Sprintf("%+.2f%%", *c.Price24hPct)
@@ -336,9 +341,10 @@ func renderCryptoTop(baseURL string, rangeStart int) string {
 		if c.Price7dPct != nil {
 			p7d = fmt.Sprintf("%+.2f%%", *c.Price7dPct)
 		}
+		tag1h := pctColor(c.Price1hPct)
 		tag24 := pctColor(c.Price24hPct)
 		tag7d := pctColor(c.Price7dPct)
-		b.WriteString(fmt.Sprintf("  %2d %s %s 24h %s%s[-] 7d %s%s[-]\n", c.Rank, c.Symbol, fmtPrice(c.Price), tag24, p24, tag7d, p7d))
+		b.WriteString(fmt.Sprintf("  %2d %s %s 1h %s%s[-] 24h %s%s[-] 7d %s%s[-]\n", c.Rank, c.Symbol, fmtPrice(c.Price), tag1h, p1h, tag24, p24, tag7d, p7d))
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
@@ -560,7 +566,7 @@ func main() {
 		if key == "crypto" {
 			// Crypto: 4 bordered sub-panels in 2×2 (Top Cryptos | Stable Coins; Crypto News | BTC ETF)
 			tvTop := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoTop(baseURL, 1))
-			tvTop.SetBorder(true).SetTitle(" Top 1-10 by mcap (16s) ")
+			tvTop.SetBorder(true).SetTitle(" Top 1-11 by mcap (16s) ")
 			tvStable := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoStablecoins(baseURL))
 			tvStable.SetBorder(true).SetTitle(" Stablecoins ")
 			tvNews := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoNews(baseURL))
@@ -655,16 +661,13 @@ func main() {
 		vStable := cryptoSubpanelViews[1]
 		vNews := cryptoSubpanelViews[2]
 		vBtc := cryptoSubpanelViews[3]
-		// Top Cryptos: 3 pages (1-10, 11-20, 21-30), 16s per page, title shows live countdown e.g. "Top 11-20 by mcap (16s)"
+		// Top Cryptos: 3 panels, 11 per page (1-11, 12-22, 23-33), 16s per page, title shows live countdown e.g. "Top 12-22 by mcap (16s)"
 		go func() {
-			rangeStarts := []int{1, 11, 21}
+			rangeStarts := []int{1, 12, 23}
 			pageIndex := 0
 			secondsLeft := 16
 			rangeLabel := func(start int) string {
-				end := start + 9
-				if end > 30 {
-					end = 30
-				}
+				end := start + 10 // 11 items per page
 				return fmt.Sprintf("%d-%d", start, end)
 			}
 			refreshContent := func() {
