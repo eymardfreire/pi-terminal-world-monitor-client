@@ -2,12 +2,16 @@
 Panel endpoints: World Clock, Weather (Open-Meteo), Global Situation Map.
 Uses cache-first for external calls; placeholders when upstream fails.
 """
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 from cachetools import TTLCache
 from fastapi import APIRouter
+
+# Parallel fetches for weather (avoids client timeout when many cities)
+_weather_executor = ThreadPoolExecutor(max_workers=12)
 
 router = APIRouter(prefix="/panels", tags=["panels"])
 
@@ -182,33 +186,58 @@ def _round_temp(t: float | None) -> str:
     return str(int(round(t)))
 
 
+def _weather_location_entry(name: str, lat: float, lon: float) -> dict[str, Any]:
+    """Build one location dict; used for parallel fetch."""
+    one = _fetch_one_weather(lat, lon)
+    if one is not None:
+        return {
+            "name": name,
+            "temp": _round_temp(one.get("temp")),
+            "temp_high": _round_temp(one.get("temp_high")),
+            "temp_low": _round_temp(one.get("temp_low")),
+            "conditions": one["conditions"],
+            "weather_code": one.get("weather_code", 0),
+        }
+    return {
+        "name": name,
+        "temp": "—",
+        "temp_high": "—",
+        "temp_low": "—",
+        "conditions": "No data",
+        "weather_code": 0,
+    }
+
+
 @router.get("/weather")
 def weather():
-    """Weather Watch panel: Open-Meteo current + daily high/low by continent. Client can cycle continents."""
-    continents_out: list[dict[str, Any]] = []
+    """Weather Watch panel: Open-Meteo current + daily high/low by continent. Fetches in parallel to avoid timeout."""
+    # Flatten to (continent, name, lat, lon) preserving order; fetch in parallel
+    tasks: list[tuple[str, str, float, float]] = []
     for continent, cities in WEATHER_BY_CONTINENT.items():
-        locations: list[dict[str, Any]] = []
         for name, lat, lon in cities:
-            one = _fetch_one_weather(lat, lon)
-            if one is not None:
-                locations.append({
-                    "name": name,
-                    "temp": _round_temp(one.get("temp")),
-                    "temp_high": _round_temp(one.get("temp_high")),
-                    "temp_low": _round_temp(one.get("temp_low")),
-                    "conditions": one["conditions"],
-                    "weather_code": one.get("weather_code", 0),
-                })
-            else:
-                locations.append({
-                    "name": name,
-                    "temp": "—",
-                    "temp_high": "—",
-                    "temp_low": "—",
-                    "conditions": "No data",
-                    "weather_code": 0,
-                })
-        continents_out.append({"name": continent, "locations": locations})
+            tasks.append((continent, name, lat, lon))
+    results: list[tuple[str, dict[str, Any]]] = []
+    futures = {_weather_executor.submit(_weather_location_entry, n, la, lo): (cont, n, la, lo) for cont, n, la, lo in tasks}
+    for fut in as_completed(futures):
+        cont, name, _lat, _lon = futures[fut]
+        try:
+            entry = fut.result()
+            results.append((cont, entry))
+        except Exception:
+            results.append((cont, {"name": name, "temp": "—", "temp_high": "—", "temp_low": "—", "conditions": "No data", "weather_code": 0}))
+    # Reassemble by continent in original order
+    order = list(WEATHER_BY_CONTINENT.keys())
+    by_continent: dict[str, list[dict[str, Any]]] = {c: [] for c in order}
+    for cont, entry in results:
+        by_continent[cont].append(entry)
+    # Preserve city order within each continent (results are unordered; re-sort by task order)
+    continents_out = []
+    for continent in order:
+        cities = WEATHER_BY_CONTINENT[continent]
+        names_order = [c[0] for c in cities]
+        locs = by_continent[continent]
+        locs_sorted = sorted(locs, key=lambda x: names_order.index(x["name"]) if x["name"] in names_order else 999)
+        continents_out.append({"name": continent, "locations": locs_sorted})
     return {
         "status": "ok",
         "continents": continents_out,

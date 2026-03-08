@@ -21,7 +21,7 @@ const (
 	defaultCycleSecs  = 8
 	defaultGridCols   = 2
 	defaultGridRows   = 2
-	requestTimeout    = 10 * time.Second
+	requestTimeout    = 25 * time.Second // weather fetches many cities; backend uses parallel fetches
 )
 
 var (
