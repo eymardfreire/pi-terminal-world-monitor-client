@@ -5,6 +5,7 @@ Uses cache-first for external calls; placeholders when upstream fails.
 import re
 import time
 import xml.etree.ElementTree as ET
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -661,18 +662,84 @@ def _source_from_url(url: str | None) -> str | None:
         return None
 
 
-# --- News panel: 8 feeds (id, panel_title, url, outlet) — outlet = news org that publishes the feed ---
-NEWS_FEEDS: list[tuple[str, str, str, str]] = [
-    ("world", "World News", "https://feeds.bbci.co.uk/news/world/rss.xml", "BBC"),
-    ("us", "United States", "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml", "BBC"),
-    ("europe", "Europe", "https://rss.dw.com/xml/rss-en-eu", "DW"),
-    ("middle-east", "Middle East", "https://www.aljazeera.com/xml/rss/all.xml", "Al Jazeera"),
-    ("africa", "Africa", "https://feeds.bbci.co.uk/news/world/africa/rss.xml", "BBC"),
-    ("latin-america", "Latin America", "https://feeds.bbci.co.uk/news/world/latin_america/rss.xml", "BBC"),
-    ("asia-pacific", "Asia-Pacific", "https://feeds.bbci.co.uk/news/world/asia/rss.xml", "BBC"),
-    ("government", "Government", "https://feeds.bbci.co.uk/news/politics/rss.xml", "BBC"),
+# --- News panel: 8 panels, each with multiple RSS feeds (diverse outlets) ---
+# Each entry: (panel_id, panel_name, [(feed_url, fallback_outlet), ...])
+NEWS_PANELS: list[tuple[str, str, list[tuple[str, str]]]] = [
+    (
+        "world",
+        "World News",
+        [
+            ("https://feeds.bbci.co.uk/news/world/rss.xml", "BBC"),
+            ("https://feeds.reuters.com/reuters/worldNews", "Reuters"),
+            ("https://rss.cnn.com/rss/cnn_topstories.rss", "CNN"),
+        ],
+    ),
+    (
+        "us",
+        "United States",
+        [
+            ("https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml", "BBC"),
+            ("https://feeds.reuters.com/reuters/domesticNews", "Reuters"),
+            ("https://feeds.npr.org/1001/rss.xml", "NPR"),
+        ],
+    ),
+    (
+        "europe",
+        "Europe",
+        [
+            ("https://rss.dw.com/xml/rss-en-eu", "DW"),
+            ("https://feeds.bbci.co.uk/news/world/europe/rss.xml", "BBC"),
+            ("https://www.euronews.com/rss?format=mrss", "Euronews"),
+        ],
+    ),
+    (
+        "middle-east",
+        "Middle East",
+        [
+            ("https://www.aljazeera.com/xml/rss/all.xml", "Al Jazeera"),
+            ("https://feeds.bbci.co.uk/news/world/middle_east/rss.xml", "BBC"),
+            ("https://feeds.reuters.com/reuters/MiddleEast", "Reuters"),
+        ],
+    ),
+    (
+        "africa",
+        "Africa",
+        [
+            ("https://feeds.bbci.co.uk/news/world/africa/rss.xml", "BBC"),
+            ("https://www.aljazeera.com/xml/rss/all.xml", "Al Jazeera"),
+            ("https://feeds.reuters.com/reuters/Africa", "Reuters"),
+        ],
+    ),
+    (
+        "latin-america",
+        "Latin America",
+        [
+            ("https://feeds.bbci.co.uk/news/world/latin_america/rss.xml", "BBC"),
+            ("https://feeds.reuters.com/reuters/LatamNews", "Reuters"),
+            ("https://rss.nytimes.com/services/xml/rss/nyt/Americas.xml", "NYT"),
+        ],
+    ),
+    (
+        "asia-pacific",
+        "Asia-Pacific",
+        [
+            ("https://feeds.bbci.co.uk/news/world/asia/rss.xml", "BBC"),
+            ("https://feeds.reuters.com/reuters/AsiaNews", "Reuters"),
+            ("https://rss.cnn.com/rss/cnn_world.rss", "CNN"),
+        ],
+    ),
+    (
+        "government",
+        "Government",
+        [
+            ("https://feeds.bbci.co.uk/news/politics/rss.xml", "BBC"),
+            ("https://feeds.reuters.com/reuters/Politics", "Reuters"),
+            ("https://feeds.npr.org/1004/rss.xml", "NPR"),
+        ],
+    ),
 ]
-NEWS_MAX_ITEMS_PER_FEED = 15
+NEWS_MAX_ITEMS_PER_FEED = 12  # per single feed when parsing
+NEWS_MAX_ITEMS_PER_PANEL = 20  # merged cap per panel
 NEWS_NEW_HOURS = 6  # items published in last N hours count as "new" in backlog
 
 
@@ -767,27 +834,82 @@ def _parse_rss_feed(
     return items, new_count
 
 
-def _fetch_one_news_feed(
-    feed_id: str, name: str, url: str, outlet: str, cutoff_utc: datetime | None
-) -> dict[str, Any]:
-    out: dict[str, Any] = {
-        "id": feed_id,
-        "name": name,
-        "new_count": 0,
-        "items": [],
-    }
+def _fetch_one_rss_feed(
+    url: str, outlet: str, cutoff_utc: datetime | None
+) -> tuple[list[dict[str, Any]], int]:
+    """Fetch one RSS URL and return (items, new_count)."""
     try:
         with httpx.Client(timeout=12.0) as client:
             r = client.get(url)
             r.raise_for_status()
-            items, new_count = _parse_rss_feed(
+            return _parse_rss_feed(
                 r.text, outlet, url, NEWS_MAX_ITEMS_PER_FEED, cutoff_utc
             )
-            out["items"] = items
-            out["new_count"] = new_count
     except Exception:
-        pass
-    return out
+        return [], 0
+
+
+def _fetch_one_feed_for_panel(
+    panel_id: str, url: str, outlet: str, cutoff_utc: datetime | None
+) -> tuple[str, list[dict[str, Any]], int]:
+    """Fetch one feed; return (panel_id, items, new_count) for later merge."""
+    items, new_count = _fetch_one_rss_feed(url, outlet, cutoff_utc)
+    return (panel_id, items, new_count)
+
+
+def _merge_panel_items(
+    panel_id: str, name: str, feed_results: list[tuple[list[dict[str, Any]], int]]
+) -> dict[str, Any]:
+    """Merge items from multiple feeds: sort by date desc, dedupe by link, cap."""
+    merged: list[dict[str, Any]] = []
+    for items, _ in feed_results:
+        merged.extend(items)
+    # Sort by pub_date descending (newest first); invalid/missing dates at end
+    def sort_key(it: dict[str, Any]) -> datetime:
+        pub = it.get("pub_date") or ""
+        try:
+            dt = parsedate_to_datetime(pub)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+            return dt
+        except Exception:
+            return datetime.min.replace(tzinfo=timezone.utc)
+
+    merged.sort(key=sort_key, reverse=True)
+    # Dedupe by link (keep first = newest)
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for it in merged:
+        link = (it.get("link") or "").strip()
+        if link and link not in seen:
+            seen.add(link)
+            unique.append(it)
+        if len(unique) >= NEWS_MAX_ITEMS_PER_PANEL:
+            break
+    # Recalc new_count for merged list
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=NEWS_NEW_HOURS)
+    new_count = 0
+    for it in unique:
+        pub = it.get("pub_date") or ""
+        try:
+            dt = parsedate_to_datetime(pub)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+            if dt >= cutoff:
+                new_count += 1
+        except Exception:
+            pass
+    return {
+        "id": panel_id,
+        "name": name,
+        "new_count": new_count,
+        "items": unique,
+    }
 
 
 def _fetch_news() -> dict[str, Any]:
@@ -796,20 +918,29 @@ def _fetch_news() -> dict[str, Any]:
         return _news_cache[cache_key]
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=NEWS_NEW_HOURS)
-    feeds_out: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    # One future per feed (panel_id, url, outlet)
+    tasks: list[tuple[str, str, str, str]] = []
+    for panel_id, name, feeds in NEWS_PANELS:
+        for url, outlet in feeds:
+            tasks.append((panel_id, url, outlet))
+    by_panel: dict[str, list[tuple[list[dict[str, Any]], int]]] = defaultdict(list)
+    with ThreadPoolExecutor(max_workers=24) as executor:
         futures = {
-            executor.submit(_fetch_one_news_feed, fid, name, url, outlet, cutoff): fid
-            for fid, name, url, outlet in NEWS_FEEDS
+            executor.submit(_fetch_one_feed_for_panel, pid, url, outlet, cutoff): (pid, url, outlet)
+            for pid, url, outlet in tasks
         }
         for fut in as_completed(futures):
             try:
-                feeds_out.append(fut.result())
+                panel_id, items, new_count = fut.result()
+                by_panel[panel_id].append((items, new_count))
             except Exception:
                 pass
-    # Keep feed order
-    by_id = {f["id"]: f for f in feeds_out}
-    feeds_ordered = [by_id[fid] for fid, _n, _u, _o in NEWS_FEEDS if fid in by_id]
+    # Merge per panel and keep order
+    feeds_ordered: list[dict[str, Any]] = []
+    for panel_id, name, _ in NEWS_PANELS:
+        if panel_id in by_panel:
+            feed = _merge_panel_items(panel_id, name, by_panel[panel_id])
+            feeds_ordered.append(feed)
     out = {"status": "ok", "source": "rss", "feeds": feeds_ordered}
     _news_cache[cache_key] = out
     return out
@@ -817,7 +948,7 @@ def _fetch_news() -> dict[str, Any]:
 
 @router.get("/news")
 def news():
-    """Eight news feeds (World, US, Europe, Middle East, Africa, Asia-Pacific, Energy, Government). Each feed has new_count (backlog) and items (title, link, pub_date, description, source). Cached 5 min."""
+    """Eight news panels; each panel aggregates multiple RSS feeds (diverse outlets). Items merged, sorted by date, deduped by link; up to 20 per panel. Each item has title, link, pub_date, description, source. Cached 5 min."""
     try:
         return _fetch_news()
     except Exception:
