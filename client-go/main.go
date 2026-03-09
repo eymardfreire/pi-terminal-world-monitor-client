@@ -167,6 +167,28 @@ type cryptoNewsItem struct {
 	Description string `json:"description"`
 }
 
+// News panel: 8 feeds (World, US, Europe, Middle East, Africa, Asia-Pacific, Energy, Government)
+type newsItem struct {
+	Title       string `json:"title"`
+	Link        string `json:"link"`
+	PubDate     string `json:"pub_date"`
+	Description string `json:"description"`
+	Source      string `json:"source"`
+}
+
+type newsFeed struct {
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	NewCount int        `json:"new_count"`
+	Items    []newsItem `json:"items"`
+}
+
+type newsResp struct {
+	Status string     `json:"status"`
+	Source string     `json:"source"`
+	Feeds  []newsFeed `json:"feeds"`
+}
+
 type cryptoNewsResp struct {
 	Status string          `json:"status"`
 	Source string          `json:"source"`
@@ -199,7 +221,7 @@ func fetchPanels(baseURL string) ([]string, error) {
 		return nil, err
 	}
 	if len(list.Panels) == 0 {
-		return []string{"crypto", "weather", "global-situation-map", "world-clock"}, nil
+		return []string{"crypto", "weather", "news", "world-clock"}, nil
 	}
 	return list.Panels, nil
 }
@@ -706,6 +728,63 @@ func renderCryptoNews(baseURL string) string {
 	return renderCryptoNewsTwoItems(items, 0, 60, 24)
 }
 
+const newsPanelSecs = 10
+
+func fetchNewsFeeds(baseURL string) ([]newsFeed, error) {
+	var d newsResp
+	if err := fetchJSON(baseURL, "/panels/news", &d); err != nil {
+		return nil, err
+	}
+	if d.Status != "ok" || len(d.Feeds) == 0 {
+		return nil, nil
+	}
+	return d.Feeds, nil
+}
+
+// renderNewsOneArticle formats one news item as headline + blurb (like crypto news), up to maxLines.
+func renderNewsOneArticle(it *newsItem, width, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	indent := "  "
+	titleLines := wrapLines(strings.TrimSpace(it.Title), width-2)
+	maxTitleLines := 2
+	if maxTitleLines > maxLines-2 {
+		maxTitleLines = maxLines - 2
+	}
+	linesUsed := 0
+	for i, w := range titleLines {
+		if i >= maxTitleLines {
+			break
+		}
+		b.WriteString(indent)
+		b.WriteString(w)
+		b.WriteString("\n")
+		linesUsed++
+	}
+	b.WriteString("\n")
+	linesUsed++
+	if linesUsed >= maxLines {
+		return strings.TrimSuffix(b.String(), "\n")
+	}
+	blurb := it.Description
+	if blurb == "" {
+		blurb = "—"
+	}
+	wrapped := wrapLines(blurb, width-2)
+	remaining := maxLines - linesUsed
+	for i, w := range wrapped {
+		if i >= remaining {
+			break
+		}
+		b.WriteString(indent)
+		b.WriteString(w)
+		b.WriteString("\n")
+	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
 // renderCrypto is used only when crypto is a single panel (legacy); prefer crypto 3-subpanel layout.
 func renderCrypto(baseURL string) string {
 	return renderCryptoTop(baseURL, 1)
@@ -826,6 +905,8 @@ func panelTitle(key string) string {
 		return "World Clock"
 	case "weather":
 		return "Weather Watch"
+	case "news":
+		return "News"
 	case "global-situation-map":
 		return "Global Situation Map"
 	default:
@@ -841,6 +922,12 @@ func panelContent(baseURL, key string) string {
 		return renderWorldClock(baseURL)
 	case "weather":
 		return renderWeather(baseURL)
+	case "news":
+		feeds, _ := fetchNewsFeeds(baseURL)
+		if len(feeds) == 0 || len(feeds[0].Items) == 0 {
+			return "No news feeds"
+		}
+		return renderNewsOneArticle(&feeds[0].Items[0], 50, 12)
 	case "global-situation-map":
 		return renderGlobalSituationMap(baseURL)
 	default:
@@ -904,28 +991,50 @@ func main() {
 		SetRows(gridRows...).
 		SetBorders(false)
 
-	// One TextView per cell (or Flex for crypto 5 sub-panels, or GSM 3 sub-panels)
+	// One TextView per cell (or Flex for crypto 5 sub-panels, or news 8 sub-panels 4+4)
 	textViews := make([]*tview.TextView, n)
 	var cryptoSubpanelViews [5]*tview.TextView
-	var gsmSubpanelViews [3]*tview.TextView
+	var newsSubpanelViews [8]*tview.TextView
 	for i := 0; i < n; i++ {
 		key := panels[i]
 		row, col := i/cols, i%cols
-		if key == "global-situation-map" {
-			hdr, alr, body, _ := fetchAndBuildGsm(baseURL)
-			tvHdr := tview.NewTextView().SetDynamicColors(true).SetText(hdr)
-			tvHdr.SetBorder(false)
-			tvAlr := tview.NewTextView().SetDynamicColors(true).SetText(alr)
-			tvAlr.SetBorder(false)
-			tvBody := tview.NewTextView().SetDynamicColors(true).SetText(body)
-			tvBody.SetBorder(false)
-			gsmSubpanelViews[0], gsmSubpanelViews[1], gsmSubpanelViews[2] = tvHdr, tvAlr, tvBody
-			gsmFlex := tview.NewFlex().SetDirection(tview.FlexRow).
-				AddItem(tvHdr, 1, 0, false).
-				AddItem(tvAlr, 1, 0, false).
-				AddItem(tvBody, 0, 1, false)
-			gsmFlex.SetBorder(true).SetTitle(" Global Situation ")
-			grid.AddItem(gsmFlex, row, col, 1, 1, 0, 0, false)
+		if key == "news" {
+			feeds, _ := fetchNewsFeeds(baseURL)
+			for j := 0; j < 8; j++ {
+				tv := tview.NewTextView().SetDynamicColors(true)
+				tv.SetBorder(true)
+				title := " News "
+				body := "No headlines"
+				if j < len(feeds) {
+					f := &feeds[j]
+					newStr := ""
+					if f.NewCount > 0 {
+						newStr = fmt.Sprintf(" %d NEW ", f.NewCount)
+					}
+					title = fmt.Sprintf(" %s%s(%ds) ", f.Name, newStr, newsPanelSecs)
+					if len(f.Items) > 0 {
+						body = renderNewsOneArticle(&f.Items[0], 40, 20)
+					}
+				}
+				tv.SetTitle(title)
+				tv.SetText(body)
+				newsSubpanelViews[j] = tv
+			}
+			topRow := tview.NewFlex().SetDirection(tview.FlexColumn).
+				AddItem(newsSubpanelViews[0], 0, 1, false).
+				AddItem(newsSubpanelViews[1], 0, 1, false).
+				AddItem(newsSubpanelViews[2], 0, 1, false).
+				AddItem(newsSubpanelViews[3], 0, 1, false)
+			botRow := tview.NewFlex().SetDirection(tview.FlexColumn).
+				AddItem(newsSubpanelViews[4], 0, 1, false).
+				AddItem(newsSubpanelViews[5], 0, 1, false).
+				AddItem(newsSubpanelViews[6], 0, 1, false).
+				AddItem(newsSubpanelViews[7], 0, 1, false)
+			newsFlex := tview.NewFlex().SetDirection(tview.FlexRow).
+				AddItem(topRow, 0, 1, false).
+				AddItem(botRow, 0, 1, false)
+			newsFlex.SetBorder(true).SetTitle(" News ")
+			grid.AddItem(newsFlex, row, col, 1, 1, 0, 0, false)
 			textViews[i] = nil
 			continue
 		}
@@ -973,10 +1082,10 @@ func main() {
 	footer.SetBorder(false)
 	grid.AddItem(footer, rows, 0, 1, cols, 0, 0, false)
 
-	// Find which grid slot is weather, crypto, or GSM (each has its own refresh)
+	// Find which grid slot is weather, crypto, or news (each has its own refresh)
 	weatherPanelIndex := -1
 	cryptoPanelIndex := -1
-	gsmPanelIndex := -1
+	newsPanelIndex := -1
 	for i := 0; i < n; i++ {
 		if panels[i] == "weather" {
 			weatherPanelIndex = i
@@ -984,8 +1093,8 @@ func main() {
 		if panels[i] == "crypto" {
 			cryptoPanelIndex = i
 		}
-		if panels[i] == "global-situation-map" {
-			gsmPanelIndex = i
+		if panels[i] == "news" {
+			newsPanelIndex = i
 		}
 	}
 
@@ -995,7 +1104,7 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			for i := 0; i < n; i++ {
-				if i == weatherPanelIndex || i == cryptoPanelIndex || i == gsmPanelIndex {
+				if i == weatherPanelIndex || i == cryptoPanelIndex || i == newsPanelIndex {
 					continue
 				}
 				key := panels[i]
@@ -1030,17 +1139,52 @@ func main() {
 		}()
 	}
 
-	// Global Situation Map: refresh on main cycle; update all 3 subpanels
-	if gsmPanelIndex >= 0 && gsmSubpanelViews[0] != nil {
+	// News panel: 8 sub-panels, 10s per panel cycle; refresh feed data every 30s
+	if newsPanelIndex >= 0 && newsSubpanelViews[0] != nil {
 		go func() {
-			ticker := time.NewTicker(time.Duration(cycleSecs) * time.Second)
+			feeds, _ := fetchNewsFeeds(baseURL)
+			itemIndices := make([]int, 8)
+			secondsLeft := newsPanelSecs
+			tickCount := 0
+			ticker := time.NewTicker(1 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
-				hdr, alr, body, _ := fetchAndBuildGsm(baseURL)
+				tickCount++
+				if tickCount%30 == 0 {
+					if newFeeds, err := fetchNewsFeeds(baseURL); err == nil && len(newFeeds) > 0 {
+						feeds = newFeeds
+					}
+				}
+				secondsLeft--
+				if secondsLeft <= 0 {
+					secondsLeft = newsPanelSecs
+					for j := range itemIndices {
+						if j < len(feeds) && len(feeds[j].Items) > 0 {
+							itemIndices[j] = (itemIndices[j] + 1) % len(feeds[j].Items)
+						}
+					}
+				}
 				app.QueueUpdateDraw(func() {
-					gsmSubpanelViews[0].SetText(hdr)
-					gsmSubpanelViews[1].SetText(alr)
-					gsmSubpanelViews[2].SetText(body)
+					for j := 0; j < 8; j++ {
+						v := newsSubpanelViews[j]
+						if v == nil {
+							continue
+						}
+						newStr := ""
+						body := "No headlines"
+						if j < len(feeds) {
+							f := &feeds[j]
+							if f.NewCount > 0 {
+								newStr = fmt.Sprintf(" %d NEW ", f.NewCount)
+							}
+							v.SetTitle(fmt.Sprintf(" %s%s(%ds) ", f.Name, newStr, secondsLeft))
+							if len(f.Items) > 0 {
+								idx := itemIndices[j] % len(f.Items)
+								body = renderNewsOneArticle(&f.Items[idx], 40, 20)
+							}
+						}
+						v.SetText(body)
+					}
 				})
 			}
 		}()

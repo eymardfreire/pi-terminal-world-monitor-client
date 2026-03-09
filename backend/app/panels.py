@@ -1,12 +1,13 @@
 """
-Panel endpoints: World Clock, Weather (Open-Meteo), Global Situation Map, Crypto.
+Panel endpoints: World Clock, Weather (Open-Meteo), Global Situation Map, Crypto, News.
 Uses cache-first for external calls; placeholders when upstream fails.
 """
 import re
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -23,6 +24,7 @@ _weather_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=128, ttl=600)  
 _gsm_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=4, ttl=300)  # 5 min
 _crypto_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=8, ttl=90)  # 90s for crypto (CoinGecko rate limit)
 _crypto_news_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=4, ttl=300)  # 5 min for crypto news RSS
+_news_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=2, ttl=300)  # 5 min for news feeds
 
 # Top cities per continent for Weather Watch: continent -> [(name, lat, lon), ...]
 # Order defines cycle: North America → Central America → ... → Oceania → repeat
@@ -163,9 +165,9 @@ def _fetch_one_weather(lat: float, lon: float) -> dict[str, Any] | None:
 
 @router.get("")
 def list_panels():
-    """Panel keys the client can request. First slot = Crypto (top-left), then Weather, GSM, World Clock."""
+    """Panel keys the client can request. First slot = Crypto (top-left), then Weather, News, World Clock."""
     return {
-        "panels": ["crypto", "weather", "global-situation-map", "world-clock"],
+        "panels": ["crypto", "weather", "news", "world-clock"],
         "status": "ok",
     }
 
@@ -624,6 +626,147 @@ def crypto_news():
         return _fetch_crypto_news()
     except Exception:
         return {"status": "error", "source": "rss", "items": [], "message": "News temporarily unavailable."}
+
+
+# --- News panel: 8 feeds (World, US, Europe, Middle East, Africa, Asia-Pacific, Energy, Government) ---
+NEWS_FEEDS: list[tuple[str, str, str]] = [
+    ("world", "World News", "https://feeds.bbci.co.uk/news/world/rss.xml"),
+    ("us", "United States", "https://rss.cnn.com/rss/cnn_topstories.rss"),
+    ("europe", "Europe", "https://rss.dw.com/xml/rss-en-eu"),
+    ("middle-east", "Middle East", "https://www.aljazeera.com/xml/rss/all.xml"),
+    ("africa", "Africa", "https://feeds.bbci.co.uk/news/world/africa/rss.xml"),
+    ("asia-pacific", "Asia-Pacific", "https://feeds.bbci.co.uk/news/world/asia/rss.xml"),
+    ("energy", "Energy & Resources", "https://feeds.bbci.co.uk/news/business/rss.xml"),
+    ("government", "Government", "https://feeds.bbci.co.uk/news/politics/rss.xml"),
+]
+NEWS_MAX_ITEMS_PER_FEED = 15
+NEWS_NEW_HOURS = 6  # items published in last N hours count as "new" in backlog
+
+
+def _parse_rss_feed(
+    xml_text: str, source_name: str, max_items: int, cutoff_utc: datetime | None
+) -> tuple[list[dict[str, Any]], int]:
+    """Parse RSS XML; return (items, new_count). new_count = items with pub_date >= cutoff_utc."""
+    items: list[dict[str, Any]] = []
+    new_count = 0
+
+    def text_of(el: ET.Element) -> str:
+        parts = list(el.itertext()) if el.itertext() else []
+        if parts:
+            return "".join(parts).strip()
+        return (el.text or "").strip()
+
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return [], 0
+
+    for tag in root.iter():
+        if tag.tag.endswith("item"):
+            title = ""
+            link = ""
+            pub_date = ""
+            description = ""
+            for child in tag:
+                name = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                if name == "title":
+                    title = text_of(child)
+                elif name == "link":
+                    link = text_of(child)
+                elif name == "pubDate":
+                    pub_date = text_of(child)
+                elif name == "description":
+                    candidate = text_of(child)
+                    if candidate:
+                        description = candidate
+                elif name == "encoded":
+                    if not description:
+                        candidate = text_of(child)
+                        if candidate:
+                            description = candidate
+            if title:
+                if description and "<" in description:
+                    description = re.sub(r"<[^>]+>", " ", description)
+                    description = " ".join(description.split())
+                item = {
+                    "title": title[:200],
+                    "link": link,
+                    "pub_date": pub_date,
+                    "description": (description[:800] if description else "").strip(),
+                    "source": source_name,
+                }
+                items.append(item)
+                if cutoff_utc and pub_date:
+                    try:
+                        dt = parsedate_to_datetime(pub_date)
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        else:
+                            dt = dt.astimezone(timezone.utc)
+                        if dt >= cutoff_utc:
+                            new_count += 1
+                    except Exception:
+                        pass
+                if len(items) >= max_items:
+                    break
+    return items, new_count
+
+
+def _fetch_one_news_feed(
+    feed_id: str, name: str, url: str, cutoff_utc: datetime | None
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "id": feed_id,
+        "name": name,
+        "new_count": 0,
+        "items": [],
+    }
+    try:
+        with httpx.Client(timeout=12.0) as client:
+            r = client.get(url)
+            r.raise_for_status()
+            items, new_count = _parse_rss_feed(
+                r.text, name, NEWS_MAX_ITEMS_PER_FEED, cutoff_utc
+            )
+            out["items"] = items
+            out["new_count"] = new_count
+    except Exception:
+        pass
+    return out
+
+
+def _fetch_news() -> dict[str, Any]:
+    cache_key = "news"
+    if cache_key in _news_cache:
+        return _news_cache[cache_key]
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=NEWS_NEW_HOURS)
+    feeds_out: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {
+            executor.submit(_fetch_one_news_feed, fid, name, url, cutoff): fid
+            for fid, name, url in NEWS_FEEDS
+        }
+        for fut in as_completed(futures):
+            try:
+                feeds_out.append(fut.result())
+            except Exception:
+                pass
+    # Keep feed order
+    by_id = {f["id"]: f for f in feeds_out}
+    feeds_ordered = [by_id[fid] for fid, _n, _u in NEWS_FEEDS if fid in by_id]
+    out = {"status": "ok", "source": "rss", "feeds": feeds_ordered}
+    _news_cache[cache_key] = out
+    return out
+
+
+@router.get("/news")
+def news():
+    """Eight news feeds (World, US, Europe, Middle East, Africa, Asia-Pacific, Energy, Government). Each feed has new_count (backlog) and items (title, link, pub_date, description, source). Cached 5 min."""
+    try:
+        return _fetch_news()
+    except Exception:
+        return {"status": "error", "source": "rss", "feeds": [], "message": "News temporarily unavailable."}
 
 
 # BTC ETF Tracker: stub data matching World Monitor layout (Net Flow, Est. Flow, Total Vol, ETFs; table TICKER, ISSUER, EST. FLOW, VOLUME, CHANGE)

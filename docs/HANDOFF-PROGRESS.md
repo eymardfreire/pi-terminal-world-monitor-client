@@ -6,7 +6,7 @@ Use this document to continue development with a new agent or session. It summar
 
 ## Session summary (for next agent)
 
-**Context:** This session completed the crypto dashboard: real crypto news with descriptions and cycling; stablecoins area split into Stablecoins + Gainers/Losers panels; top cryptos extended to 56; stablecoins tile layout and ticker-only list with 8s paging; gainers/losers with 24h change % and 12-per-page cycle. **Do not re-implement these**—they are done. **Next focus: Global Situation Map** (see “Next steps” and “Global Situation Map” below).
+**Context:** This session **replaced the Global Situation panel with an 8 News panel** (4 top, 4 bottom): World, US, Europe, Middle East, Africa, Asia-Pacific, Energy & Resources, Government. Each sub-panel shows **X NEW** (backlog count), **10s** timer, and cycles **headline + article/blurb** (like crypto news). GSM is scrapped from the UI; backend and docs kept for future. Crypto dashboard (56 coins, stablecoins, gainers/losers, crypto news, BTC ETF) is unchanged—do not re-implement.
 
 ### Backend changes (all in `backend/app/panels.py`)
 
@@ -62,7 +62,8 @@ Use this document to continue development with a new agent or session. It summar
   - Backend (Python/FastAPI), Go client (recommended), Python client (alternative). OpenSpec in `openspec/changes/add-pi-terminal-world-monitor-client/`.
 
 - **Backend (VPS 209.38.141.129)**  
-  - **Endpoints:** `GET /health`, `GET /panels`, `GET /panels/world-clock`, `GET /panels/weather`, `GET /panels/global-situation-map`, `GET /panels/crypto/top`, `GET /panels/crypto/stablecoins`, `GET /panels/crypto/news`, `GET /panels/crypto/gainers-losers`, `GET /panels/crypto/btc-etf`.  
+  - **Endpoints:** `GET /health`, `GET /panels`, `GET /panels/world-clock`, `GET /panels/weather`, `GET /panels/news`, `GET /panels/global-situation-map` (kept for future), `GET /panels/crypto/*`, …  
+  - **News:** `GET /panels/news` — 8 feeds (World, US, Europe, Middle East, Africa, Asia-Pacific, Energy & Resources, Government). Each feed: `id`, `name`, `new_count` (items in last 6h), `items[]` (title, link, pub_date, description, source). RSS, 5 min cache.  
   - **Crypto top:** 56 coins, slice by `range_start` + `per_page` (5–25), 1h/24h/7d.  
   - **Crypto news:** CoinDesk RSS, description (blurb), 5 min cache.  
   - **Stablecoins:** status_label, market_cap_b, volume_b, per-coin peg + optional mcap/vol/24h (client uses tile + tickers only).  
@@ -73,14 +74,15 @@ Use this document to continue development with a new agent or session. It summar
   - **Build:** `cd client-go && go build -o pi-world-monitor-client .`  
   - **Env:** `BACKEND_URL`, `CYCLE_SECONDS`, `GRID_COLS` / `GRID_ROWS`. Press **Q** to quit.  
   - **Crypto panel:** 5 sub-panels (Top Cryptos 56/8s | Stablecoins 8s + Gainers/Losers 10s; News 20s | BTC ETF 6s).  
-  - **Weather, World Clock:** use `panelContent()` and grid refresh on main cycle. **Global Situation Map:** 3 subpanels (header, alerts, layers+regions), own refresh on main cycle.
+  - **News panel:** Replaces Global Situation in grid. 8 sub-panels (4 top, 4 bottom): World News, United States, Europe, Middle East, Africa, Asia-Pacific, Energy & Resources, Government. Each shows **X NEW** (backlog), **10s** timer, cycles **headline + article/blurb** (like crypto news). Feed data refreshed every 30s.  
+  - **Weather, World Clock:** use `panelContent()` and grid refresh on main cycle.
 
 - **Deployment and docs**  
   - docs/DEPLOY-BACKEND.md, INSTALL-PI.md, contrib/systemd/, AGENTS.md.
 
 ### Not done
 
-- **Global Situation Map real data** – Text translation (3 subpanels: header, alerts, layers+regions) and backend shape are in place; stub data only; wire real feeds when available.  
+- **Global Situation Map** – Scrapped from UI; backend and docs kept for possible future use.  
 - **BTC ETF real data** – Stub in place; wire Farside/Blockworks or similar.  
 - **Crypto sparklines** – Optional.  
 - **Pi 3B validation** – ARM build and INSTALL-PI.md.  
@@ -107,7 +109,7 @@ export BACKEND_URL=http://209.38.141.129:8000
 curl -s http://209.38.141.129:8000/health
 curl -s http://209.38.141.129:8000/panels
 curl -s http://209.38.141.129:8000/panels/crypto/top?range_start=1&per_page=11
-curl -s http://209.38.141.129:8000/panels/global-situation-map
+curl -s http://209.38.141.129:8000/panels/news
 ```
 
 ---
@@ -140,7 +142,10 @@ Client-only changes: just rebuild and run the Go client.
 
 ---
 
-## Backend API reference (crypto + GSM)
+## Backend API reference (crypto + news + GSM)
+
+- **`GET /panels/news`**  
+  `{ "status", "source", "feeds": [ { "id", "name", "new_count", "items": [ { "title", "link", "pub_date", "description", "source" } ] } ] }` — 8 feeds; client shows 4+4 layout, 10s cycle, X NEW, headline+blurb.
 
 - **`GET /panels/crypto/top?range_start=1&per_page=11`**  
   `{ "status", "source", "range", "coins": [ { "rank", "symbol", "name", "price", "price_1h_pct", "price_24h_pct", "price_7d_pct" } ] }` — 56 coins total; slice by params.
@@ -158,21 +163,21 @@ Client-only changes: just rebuild and run the Go client.
   Stub: `net_flow_label`, `est_flow_m`, `total_vol_m`, `etfs_up`, `etfs_down`, `etfs[]`.
 
 - **`GET /panels/global-situation-map`**  
-  `{ "status", "source", "defcon", "defcon_pct", "time_window", "updated_utc", "summary": { "high", "elevated", "monitoring": [] }, "layers": [ { "id", "name", "icon", "active", "locations" } ], "regions": [ { "name", "severity", "events" } ] }` — Client renders as 3 subpanels (header, alerts, layers+regions).
+  (Kept for future.) `{ "status", "regions", "summary", "layers", … }` — Not shown in default grid; see “Global Situation Map” below.
 
 ---
 
-## Global Situation Map (text translation)
+## Global Situation Map (scrapped from UI; kept for future)
 
-- **Backend:** `backend/app/panels.py` — `GET /panels/global-situation-map` returns: `defcon`, `defcon_pct`, `time_window`, `updated_utc`, `summary` (high/elevated/monitoring location lists), `layers[]` (id, name, icon, active, locations), `regions[]` (name, severity, events). Layer definitions in `GSM_LAYER_DEFS` (all layers from UI; stub data uses a subset with locations).  
-- **Client:** `client-go/main.go` — Global Situation panel uses **3 subpanels** in one quadrant: (1) header line: time window, DEFCON, updated UTC; (2) alerts by level: High / Elevated / Monitoring with location lists, color-coded; (3) Layers (one line per active layer with locations) and Regions (severity + events). `fetchAndBuildGsm`, `buildGsmHeader`, `buildGsmAlerts`, `buildGsmLayersRegions`. GSM refreshes on main cycle like other panels.  
-- **Intent:** Text translation of the map: same information (alert levels, layers, regions) without exceeding the panel quadrant; real data pipeline can replace stub later.
+- **Backend:** `GET /panels/global-situation-map` still available; returns regions, summary, layers (stub).  
+- **Client:** Panel no longer in default grid; `panelContent("global-situation-map")` and render helpers still present so it can be re-enabled.  
+- **Intent:** May be re-implemented later; docs and API kept.
 
 ---
 
 ## Next steps (for the next agent)
 
-1. **Global Situation Map** – Text translation done (header, alerts by level, layers+regions in 3 subpanels). Stub data; next: wire real feeds and optional time-window/defcon API.  
+1. **News panel** – Done (8 feeds, 4+4 layout, 10s cycle, X NEW backlog, headline+blurb per panel). **Global Situation Map** – Removed from UI; backend/docs kept for future.  
 2. **BTC ETF real data** – Replace stub with Farside/Blockworks or similar; keep response shape.  
 3. **Crypto sparklines** – Optional ASCII/Unicode for top cryptos.  
 4. **Pi 3B validation** – ARM build, test on DietPi, update INSTALL-PI.md.  
