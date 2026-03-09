@@ -63,7 +63,7 @@ Use this document to continue development with a new agent or session. It summar
 
 - **Backend (VPS 209.38.141.129)**  
   - **Endpoints:** `GET /health`, `GET /panels`, `GET /panels/world-clock`, `GET /panels/weather`, `GET /panels/news`, `GET /panels/global-situation-map` (kept for future), `GET /panels/crypto/*`, …  
-  - **News:** `GET /panels/news` — 8 feeds (World, US, Europe, Middle East, Africa, Asia-Pacific, Energy & Resources, Government). Each feed: `id`, `name`, `new_count` (items in last 6h), `items[]` (title, link, pub_date, description, source). RSS, 5 min cache.  
+  - **News:** `GET /panels/news` — 8 feeds: World News, United States (BBC US/Canada), Europe, Middle East, Africa, **Latin America**, Asia-Pacific, Government. Each feed: `id`, `name`, `new_count` (items in last 6h), `items[]` (title, link, pub_date, description, source). RSS, 5 min cache.  
   - **Crypto top:** 56 coins, slice by `range_start` + `per_page` (5–25), 1h/24h/7d.  
   - **Crypto news:** CoinDesk RSS, description (blurb), 5 min cache.  
   - **Stablecoins:** status_label, market_cap_b, volume_b, per-coin peg + optional mcap/vol/24h (client uses tile + tickers only).  
@@ -74,7 +74,7 @@ Use this document to continue development with a new agent or session. It summar
   - **Build:** `cd client-go && go build -o pi-world-monitor-client .`  
   - **Env:** `BACKEND_URL`, `CYCLE_SECONDS`, `GRID_COLS` / `GRID_ROWS`. Press **Q** to quit.  
   - **Crypto panel:** 5 sub-panels (Top Cryptos 56/8s | Stablecoins 8s + Gainers/Losers 10s; News 20s | BTC ETF 6s).  
-  - **News panel:** Replaces Global Situation in grid. 8 sub-panels (4 top, 4 bottom): World News, United States, Europe, Middle East, Africa, Asia-Pacific, Energy & Resources, Government. Each shows **X NEW** (backlog), **10s** timer, cycles **headline + article/blurb** (like crypto news). Feed data refreshed every 30s.  
+  - **News panel:** Replaces Global Situation in grid. 8 sub-panels (4 top, 4 bottom): World News, United States, Europe, Middle East, Africa, **Latin America**, Asia-Pacific, Government. Each shows **X NEW** (backlog), **25s** timer with **5s offset** (staggered top-left→right), **headline + article/blurb** (description in italic). Feed data refreshed every 30s.  
   - **Weather, World Clock:** use `panelContent()` and grid refresh on main cycle.
 
 - **Deployment and docs**  
@@ -145,7 +145,7 @@ Client-only changes: just rebuild and run the Go client.
 ## Backend API reference (crypto + news + GSM)
 
 - **`GET /panels/news`**  
-  `{ "status", "source", "feeds": [ { "id", "name", "new_count", "items": [ { "title", "link", "pub_date", "description", "source" } ] } ] }` — 8 feeds; client shows 4+4 layout, 10s cycle, X NEW, headline+blurb.
+  `{ "status", "source", "feeds": [ { "id", "name", "new_count", "items": [ ... ] } ] }` — 8 feeds: World News, United States (BBC US/Canada), Europe, Middle East, Africa, **Latin America**, Asia-Pacific, Government. Client: 4+4 layout, **25s** per panel, **5s offset** (staggered refresh top-left→right), X NEW, headline + blurb (description in italic).
 
 - **`GET /panels/crypto/top?range_start=1&per_page=11`**  
   `{ "status", "source", "range", "coins": [ { "rank", "symbol", "name", "price", "price_1h_pct", "price_24h_pct", "price_7d_pct" } ] }` — 56 coins total; slice by params.

@@ -628,15 +628,15 @@ def crypto_news():
         return {"status": "error", "source": "rss", "items": [], "message": "News temporarily unavailable."}
 
 
-# --- News panel: 8 feeds (World, US, Europe, Middle East, Africa, Asia-Pacific, Energy, Government) ---
+# --- News panel: 8 feeds (World, US, Europe, Middle East, Africa, Latin America, Asia-Pacific, Government) ---
 NEWS_FEEDS: list[tuple[str, str, str]] = [
     ("world", "World News", "https://feeds.bbci.co.uk/news/world/rss.xml"),
-    ("us", "United States", "https://rss.cnn.com/rss/cnn_topstories.rss"),
+    ("us", "United States", "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml"),
     ("europe", "Europe", "https://rss.dw.com/xml/rss-en-eu"),
     ("middle-east", "Middle East", "https://www.aljazeera.com/xml/rss/all.xml"),
     ("africa", "Africa", "https://feeds.bbci.co.uk/news/world/africa/rss.xml"),
+    ("latin-america", "Latin America", "https://feeds.bbci.co.uk/news/world/latin_america/rss.xml"),
     ("asia-pacific", "Asia-Pacific", "https://feeds.bbci.co.uk/news/world/asia/rss.xml"),
-    ("energy", "Energy & Resources", "https://feeds.bbci.co.uk/news/business/rss.xml"),
     ("government", "Government", "https://feeds.bbci.co.uk/news/politics/rss.xml"),
 ]
 NEWS_MAX_ITEMS_PER_FEED = 15

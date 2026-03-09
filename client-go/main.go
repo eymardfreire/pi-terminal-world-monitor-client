@@ -728,7 +728,8 @@ func renderCryptoNews(baseURL string) string {
 	return renderCryptoNewsTwoItems(items, 0, 60, 24)
 }
 
-const newsPanelSecs = 10
+const newsPanelSecs = 25
+const newsPanelOffsetSecs = 5 // each panel's timer offset by 5s from previous (top-left to right)
 
 func fetchNewsFeeds(baseURL string) ([]newsFeed, error) {
 	var d newsResp
@@ -741,14 +742,19 @@ func fetchNewsFeeds(baseURL string) ([]newsFeed, error) {
 	return d.Feeds, nil
 }
 
-// renderNewsOneArticle formats one news item as headline + blurb (like crypto news), up to maxLines.
+// renderNewsOneArticle formats one news item as headline + blurb; description in italic, aligned for readability.
 func renderNewsOneArticle(it *newsItem, width, maxLines int) string {
 	if maxLines <= 0 {
 		return ""
 	}
+	// Use consistent wrap width (indent is 2 spaces; content width = width - 2)
+	contentWidth := width - 2
+	if contentWidth < 12 {
+		contentWidth = 12
+	}
 	var b strings.Builder
 	indent := "  "
-	titleLines := wrapLines(strings.TrimSpace(it.Title), width-2)
+	titleLines := wrapLines(strings.TrimSpace(it.Title), contentWidth)
 	maxTitleLines := 2
 	if maxTitleLines > maxLines-2 {
 		maxTitleLines = maxLines - 2
@@ -759,7 +765,7 @@ func renderNewsOneArticle(it *newsItem, width, maxLines int) string {
 			break
 		}
 		b.WriteString(indent)
-		b.WriteString(w)
+		b.WriteString(strings.TrimSpace(w))
 		b.WriteString("\n")
 		linesUsed++
 	}
@@ -768,19 +774,22 @@ func renderNewsOneArticle(it *newsItem, width, maxLines int) string {
 	if linesUsed >= maxLines {
 		return strings.TrimSuffix(b.String(), "\n")
 	}
-	blurb := it.Description
+	blurb := strings.TrimSpace(it.Description)
 	if blurb == "" {
 		blurb = "—"
 	}
-	wrapped := wrapLines(blurb, width-2)
+	wrapped := wrapLines(blurb, contentWidth)
 	remaining := maxLines - linesUsed
 	for i, w := range wrapped {
 		if i >= remaining {
 			break
 		}
 		b.WriteString(indent)
-		b.WriteString(w)
-		b.WriteString("\n")
+		// Italic for article description (tview: [::i]...[::-])
+		b.WriteString("[::i]")
+		b.WriteString(strings.TrimSpace(w))
+		b.WriteString("[::-]\n")
+		linesUsed++
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
@@ -1005,13 +1014,18 @@ func main() {
 				tv.SetBorder(true)
 				title := " News "
 				body := "No headlines"
+				// Initial countdown staggered: panel j shows 25 - (j*5)%25 (same as goroutine at t=0)
+				secLeft := newsPanelSecs - (j * newsPanelOffsetSecs % newsPanelSecs)
+				if secLeft == 0 {
+					secLeft = newsPanelSecs
+				}
 				if j < len(feeds) {
 					f := &feeds[j]
 					newStr := ""
 					if f.NewCount > 0 {
 						newStr = fmt.Sprintf(" %d NEW ", f.NewCount)
 					}
-					title = fmt.Sprintf(" %s%s(%ds) ", f.Name, newStr, newsPanelSecs)
+					title = fmt.Sprintf(" %s%s(%ds) ", f.Name, newStr, secLeft)
 					if len(f.Items) > 0 {
 						body = renderNewsOneArticle(&f.Items[0], 40, 20)
 					}
@@ -1139,12 +1153,11 @@ func main() {
 		}()
 	}
 
-	// News panel: 8 sub-panels, 10s per panel cycle; refresh feed data every 30s
+	// News panel: 8 sub-panels, 25s per panel; each panel offset by 5s (top-left to right); refresh feed data every 30s
 	if newsPanelIndex >= 0 && newsSubpanelViews[0] != nil {
 		go func() {
 			feeds, _ := fetchNewsFeeds(baseURL)
 			itemIndices := make([]int, 8)
-			secondsLeft := newsPanelSecs
 			tickCount := 0
 			ticker := time.NewTicker(1 * time.Second)
 			defer ticker.Stop()
@@ -1155,10 +1168,10 @@ func main() {
 						feeds = newFeeds
 					}
 				}
-				secondsLeft--
-				if secondsLeft <= 0 {
-					secondsLeft = newsPanelSecs
-					for j := range itemIndices {
+				// Per-panel: offset by 5s each (panel j effective tick = tickCount + j*5); advance when that tick is a multiple of 25
+				for j := 0; j < 8; j++ {
+					effTick := tickCount + j*newsPanelOffsetSecs
+					if effTick > 0 && effTick%newsPanelSecs == 0 {
 						if j < len(feeds) && len(feeds[j].Items) > 0 {
 							itemIndices[j] = (itemIndices[j] + 1) % len(feeds[j].Items)
 						}
@@ -1170,6 +1183,11 @@ func main() {
 						if v == nil {
 							continue
 						}
+						effTick := tickCount + j*newsPanelOffsetSecs
+						secLeft := newsPanelSecs - (effTick % newsPanelSecs)
+						if secLeft == 0 {
+							secLeft = newsPanelSecs
+						}
 						newStr := ""
 						body := "No headlines"
 						if j < len(feeds) {
@@ -1177,7 +1195,7 @@ func main() {
 							if f.NewCount > 0 {
 								newStr = fmt.Sprintf(" %d NEW ", f.NewCount)
 							}
-							v.SetTitle(fmt.Sprintf(" %s%s(%ds) ", f.Name, newStr, secondsLeft))
+							v.SetTitle(fmt.Sprintf(" %s%s(%ds) ", f.Name, newStr, secLeft))
 							if len(f.Items) > 0 {
 								idx := itemIndices[j] % len(f.Items)
 								body = renderNewsOneArticle(&f.Items[idx], 40, 20)
