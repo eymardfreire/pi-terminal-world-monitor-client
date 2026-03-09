@@ -250,21 +250,95 @@ def weather():
     }
 
 
+# Layer definitions for text-based map (id, display name, icon). Order matches UI.
+GSM_LAYER_DEFS: list[dict[str, str]] = [
+    {"id": "iran-attacks", "name": "Iran Attacks", "icon": "🎯"},
+    {"id": "intel-hotspots", "name": "Intel Hotspots", "icon": "🎯"},
+    {"id": "conflict-zones", "name": "Conflict Zones", "icon": "⚔"},
+    {"id": "military-bases", "name": "Military Bases", "icon": "🏛"},
+    {"id": "nuclear-sites", "name": "Nuclear Sites", "icon": "☢"},
+    {"id": "gamma-irradiators", "name": "Gamma Irradiators", "icon": "⚠"},
+    {"id": "spaceports", "name": "Spaceports", "icon": "🚀"},
+    {"id": "undersea-cables", "name": "Undersea Cables", "icon": "🔌"},
+    {"id": "pipelines", "name": "Pipelines", "icon": "🛢"},
+    {"id": "ai-datacenters", "name": "AI Data Centers", "icon": "🖥"},
+    {"id": "military-activity", "name": "Military Activity", "icon": "✈"},
+    {"id": "ship-traffic", "name": "Ship Traffic", "icon": "🚢"},
+    {"id": "trade-routes", "name": "Trade Routes", "icon": "⚓"},
+    {"id": "aviation", "name": "Aviation", "icon": "✈"},
+    {"id": "protests", "name": "Protests", "icon": "📢"},
+    {"id": "armed-conflict-events", "name": "Armed Conflict Events", "icon": "⚔"},
+    {"id": "displacement-flows", "name": "Displacement Flows", "icon": "👥"},
+    {"id": "climate-anomalies", "name": "Climate Anomalies", "icon": "🌫"},
+    {"id": "weather-alerts", "name": "Weather Alerts", "icon": "⛈"},
+    {"id": "internet-outages", "name": "Internet Outages", "icon": "📡"},
+    {"id": "cyber-threats", "name": "Cyber Threats", "icon": "🛡"},
+    {"id": "natural-events", "name": "Natural Events", "icon": "🌋"},
+    {"id": "fires", "name": "Fires", "icon": "🔥"},
+    {"id": "strategic-waterways", "name": "Strategic Waterways", "icon": "⚓"},
+    {"id": "economic-centers", "name": "Economic Centers", "icon": "💰"},
+    {"id": "critical-minerals", "name": "Critical Minerals", "icon": "💎"},
+    {"id": "gps-jamming", "name": "GPS JAMMING", "icon": "📡"},
+    {"id": "cii-instability", "name": "CII Instability", "icon": "🌎"},
+    {"id": "day-night", "name": "Day/Night", "icon": "🌓"},
+]
+
+
 def _build_global_situation_map() -> dict[str, Any]:
-    """Build Global Situation Map from stub/aggregated data. No paid APIs."""
+    """Build Global Situation Map from stub/aggregated data. No paid APIs.
+    Returns structure for text translation: header (defcon, time_window), alerts by level,
+    layers with locations, and regions with severity/events.
+    """
     cache_key = "data"
     if cache_key in _gsm_cache:
         return _gsm_cache[cache_key]
-    # Stub structure: regions with severity and event types (spec 2.3 / 3.5).
-    # Real pipeline would aggregate conflict/news feeds; for now return defined shape.
-    regions = [
-        {"name": "Europe", "severity": "monitoring", "events": ["diplomacy", "trade"]},
-        {"name": "Middle East", "severity": "elevated", "events": ["conflict", "hotspot"]},
-        {"name": "Asia-Pacific", "severity": "monitoring", "events": ["trade", "military"]},
-        {"name": "Americas", "severity": "normal", "events": ["economy"]},
-        {"name": "Africa", "severity": "elevated", "events": ["conflict", "disaster"]},
+    now = datetime.now(timezone.utc)
+    # Stub: mirror map semantics — high/elevated/monitoring by location; layers with locations.
+    summary = {
+        "high": ["Ukraine", "Iran", "Sudan", "Myanmar"],
+        "elevated": ["Iraq", "Syria", "Yemen", "Nigeria", "Ethiopia", "Pakistan", "Philippines"],
+        "monitoring": ["UK", "France", "Germany", "Poland", "India", "China coast", "USA East", "USA West", "Venezuela", "Colombia", "Kenya", "South Africa"],
+    }
+    # Layers that have data in stub (active on map). Each: id, name, icon, active, locations.
+    layers_with_data = [
+        ("conflict-zones", ["Ukraine", "Sudan", "Myanmar", "Syria", "Iraq"]),
+        ("intel-hotspots", ["Iran", "Ukraine", "Middle East", "East Asia"]),
+        ("iran-attacks", ["Iran", "Iraq", "Israel"]),
+        ("military-bases", ["Europe", "Middle East", "USA East", "USA West", "Japan"]),
+        ("nuclear-sites", ["Iran", "Middle East", "North Korea"]),
+        ("gamma-irradiators", ["Europe", "USA", "Asia"]),
+        ("military-activity", ["Ukraine", "Middle East", "South China Sea"]),
     ]
-    out = {"status": "ok", "source": "stub", "regions": regions}
+    layers_out = []
+    defs_by_id = {d["id"]: d for d in GSM_LAYER_DEFS}
+    for layer_id, locations in layers_with_data:
+        d = defs_by_id.get(layer_id, {"id": layer_id, "name": layer_id.replace("-", " ").title(), "icon": "•"})
+        layers_out.append({
+            "id": layer_id,
+            "name": d["name"],
+            "icon": d["icon"],
+            "active": True,
+            "locations": locations,
+        })
+    # Regions (by geography) with severity and event-type labels.
+    regions = [
+        {"name": "Europe", "severity": "monitoring", "events": ["conflict", "bases", "trade"]},
+        {"name": "Middle East", "severity": "elevated", "events": ["conflict", "hotspot", "nuclear", "military"]},
+        {"name": "Asia-Pacific", "severity": "monitoring", "events": ["conflict", "military", "trade"]},
+        {"name": "Americas", "severity": "normal", "events": ["bases", "economy"]},
+        {"name": "Africa", "severity": "elevated", "events": ["conflict", "disaster", "hotspot"]},
+    ]
+    out = {
+        "status": "ok",
+        "source": "stub",
+        "defcon": 2,
+        "defcon_pct": 44,
+        "time_window": "7d",
+        "updated_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "summary": summary,
+        "layers": layers_out,
+        "regions": regions,
+    }
     _gsm_cache[cache_key] = out
     return out
 

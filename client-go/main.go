@@ -71,11 +71,25 @@ type gsmRegion struct {
 	Events   []string `json:"events"`
 }
 
+type gsmLayer struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Icon      string   `json:"icon"`
+	Active    bool     `json:"active"`
+	Locations []string `json:"locations"`
+}
+
 type globalSituationMapResp struct {
-	Status  string      `json:"status"`
-	Source  string      `json:"source"`
-	Regions []gsmRegion `json:"regions"`
-	Message string      `json:"message"`
+	Status     string            `json:"status"`
+	Source     string            `json:"source"`
+	Defcon     int               `json:"defcon"`
+	DefconPct  int               `json:"defcon_pct"`
+	TimeWindow string            `json:"time_window"`
+	UpdatedUTC string            `json:"updated_utc"`
+	Summary    map[string][]string `json:"summary"`
+	Layers     []gsmLayer        `json:"layers"`
+	Regions    []gsmRegion       `json:"regions"`
+	Message    string            `json:"message"`
 }
 
 // Crypto panel (4 sub-panels: top cryptos, stablecoins, crypto news, btc-etf)
@@ -398,7 +412,7 @@ func formatStableVol(b *float64) string {
 	return fmt.Sprintf("$%.0fM", *b*1000)
 }
 
-// renderCryptoStablecoinsPageFromData renders one page: for each coin, status on one line then mcap/vol below (same page).
+// renderCryptoStablecoinsPageFromData renders one page: tile = status then MCap|Vol; tickers = one line each (no mcap/vol per coin).
 func renderCryptoStablecoinsPageFromData(d *cryptoStablecoinsResp, pageStart, perPage int) string {
 	if d == nil || len(d.Coins) == 0 {
 		return "No data"
@@ -417,35 +431,17 @@ func renderCryptoStablecoinsPageFromData(d *cryptoStablecoinsResp, pageStart, pe
 	if d.StatusLabel != "Healthy" {
 		statusTag = "[yellow]"
 	}
-	b.WriteString(fmt.Sprintf(" %s%s[-]", statusTag, d.StatusLabel))
+	b.WriteString(fmt.Sprintf(" %s%s[-]\n", statusTag, d.StatusLabel))
 	if d.MarketCapB != nil && d.VolumeB != nil {
-		b.WriteString(fmt.Sprintf("  MCap: $%.1fB | Vol: $%.1fB", *d.MarketCapB, *d.VolumeB))
+		b.WriteString(fmt.Sprintf(" MCap: $%.1fB | Vol: $%.1fB\n", *d.MarketCapB, *d.VolumeB))
 	}
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 	for _, c := range page {
 		pegTag := "[green]"
 		if c.PegStatus != "ON PEG" {
 			pegTag = "[red]"
 		}
 		b.WriteString(fmt.Sprintf("  %-6s  $%.2f  %s%s[-] %.2f%%\n", c.Symbol, c.Price, pegTag, c.PegStatus, c.DeviationPct))
-		mcapStr := "—"
-		if c.MarketCapB != nil {
-			if *c.MarketCapB >= 1 {
-				mcapStr = fmt.Sprintf("$%.1fB", *c.MarketCapB)
-			} else {
-				mcapStr = fmt.Sprintf("$%.0fM", *c.MarketCapB*1000)
-			}
-		}
-		volStr := formatStableVol(c.VolumeB)
-		chgStr := "—"
-		if c.PriceChange24hPct != nil {
-			chgStr = fmt.Sprintf("%+.2f%%", *c.PriceChange24hPct)
-		}
-		chgTag := "[green]"
-		if c.PriceChange24hPct != nil && *c.PriceChange24hPct < 0 {
-			chgTag = "[red]"
-		}
-		b.WriteString(fmt.Sprintf("         MCap %s  Vol %s  %s%s[-]\n", mcapStr, volStr, chgTag, chgStr))
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
@@ -715,37 +711,109 @@ func renderCrypto(baseURL string) string {
 	return renderCryptoTop(baseURL, 1)
 }
 
-func renderGlobalSituationMap(baseURL string) string {
+func gsmSeverityTag(severity string) string {
+	switch strings.ToLower(severity) {
+	case "critical", "high":
+		return "[red]"
+	case "elevated":
+		return "[yellow]"
+	case "monitoring":
+		return "[cyan]"
+	case "normal":
+		return "[green]"
+	default:
+		return "[white]"
+	}
+}
+
+func buildGsmHeader(d *globalSituationMapResp) string {
+	if d.TimeWindow == "" {
+		d.TimeWindow = "7d"
+	}
+	s := fmt.Sprintf("%s · DEFCON %d", d.TimeWindow, d.Defcon)
+	if d.DefconPct > 0 {
+		s += fmt.Sprintf(" %d%%", d.DefconPct)
+	}
+	if d.UpdatedUTC != "" {
+		// show time only, e.g. "00:35 UTC"
+		if len(d.UpdatedUTC) >= 16 {
+			s += " · " + d.UpdatedUTC[11:16] + " UTC"
+		}
+	}
+	return s
+}
+
+func buildGsmAlerts(d *globalSituationMapResp) string {
+	if len(d.Summary) == 0 {
+		return ""
+	}
+	levelLabels := map[string]string{"high": "High", "elevated": "Elevated", "monitoring": "Monitoring"}
+	var parts []string
+	for _, level := range []string{"high", "elevated", "monitoring"} {
+		locs := d.Summary[level]
+		if len(locs) == 0 {
+			continue
+		}
+		label := levelLabels[level]
+		if label == "" {
+			label = level
+		}
+		tag := gsmSeverityTag(level)
+		parts = append(parts, fmt.Sprintf("%s%s[-]: %s", tag, label, strings.Join(locs, ", ")))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func buildGsmLayersRegions(d *globalSituationMapResp) string {
+	var b strings.Builder
+	if len(d.Layers) > 0 {
+		b.WriteString("[yellow]Layers[-]\n")
+		for _, l := range d.Layers {
+			if !l.Active || len(l.Locations) == 0 {
+				continue
+			}
+			b.WriteString(fmt.Sprintf("  %s %s: %s\n", l.Icon, l.Name, strings.Join(l.Locations, ", ")))
+		}
+	}
+	b.WriteString("[yellow]Regions[-] ")
+	for i, r := range d.Regions {
+		if i > 0 {
+			b.WriteString(" | ")
+		}
+		tag := gsmSeverityTag(r.Severity)
+		b.WriteString(fmt.Sprintf("%s%s[-] %s", tag, r.Severity, r.Name))
+		if len(r.Events) > 0 {
+			b.WriteString(" (" + strings.Join(r.Events, ", ") + ")")
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func fetchAndBuildGsm(baseURL string) (header, alerts, body string, ok bool) {
 	var d globalSituationMapResp
 	if err := fetchJSON(baseURL, "/panels/global-situation-map", &d); err != nil {
-		return "No data"
+		return "—", "No data", "", false
 	}
 	if d.Status != "ok" && d.Status != "" {
-		if d.Message != "" {
-			return d.Message
-		}
-		return "No data"
+		return "—", d.Message, "", false
 	}
+	return buildGsmHeader(&d), buildGsmAlerts(&d), buildGsmLayersRegions(&d), true
+}
+
+func renderGlobalSituationMap(baseURL string) string {
+	header, alerts, body := "", "", ""
+	header, alerts, body, _ = fetchAndBuildGsm(baseURL)
 	var b strings.Builder
-	for _, r := range d.Regions {
-		// Severity color: critical=red, elevated=yellow, monitoring=cyan, normal=green (tview tags)
-		sevTag := "[white]"
-		switch strings.ToLower(r.Severity) {
-		case "critical":
-			sevTag = "[red]"
-		case "elevated":
-			sevTag = "[yellow]"
-		case "monitoring":
-			sevTag = "[cyan]"
-		case "normal":
-			sevTag = "[green]"
-		}
-		b.WriteString(fmt.Sprintf("  %s%s[-] %s", sevTag, r.Severity, r.Name))
-		if len(r.Events) > 0 {
-			b.WriteString(" · ")
-			b.WriteString(strings.Join(r.Events, ", "))
-		}
+	if header != "" && header != "—" {
+		b.WriteString(header)
 		b.WriteString("\n")
+	}
+	if alerts != "" {
+		b.WriteString(alerts)
+		b.WriteString("\n")
+	}
+	if body != "" {
+		b.WriteString(body)
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
@@ -836,12 +904,31 @@ func main() {
 		SetRows(gridRows...).
 		SetBorders(false)
 
-	// One TextView per cell (or a Flex for crypto with 5 sub-panels: Top | Stable+GainersLosers; News | BTC ETF)
+	// One TextView per cell (or Flex for crypto 5 sub-panels, or GSM 3 sub-panels)
 	textViews := make([]*tview.TextView, n)
 	var cryptoSubpanelViews [5]*tview.TextView
+	var gsmSubpanelViews [3]*tview.TextView
 	for i := 0; i < n; i++ {
 		key := panels[i]
 		row, col := i/cols, i%cols
+		if key == "global-situation-map" {
+			hdr, alr, body, _ := fetchAndBuildGsm(baseURL)
+			tvHdr := tview.NewTextView().SetDynamicColors(true).SetText(hdr)
+			tvHdr.SetBorder(false)
+			tvAlr := tview.NewTextView().SetDynamicColors(true).SetText(alr)
+			tvAlr.SetBorder(false)
+			tvBody := tview.NewTextView().SetDynamicColors(true).SetText(body)
+			tvBody.SetBorder(false)
+			gsmSubpanelViews[0], gsmSubpanelViews[1], gsmSubpanelViews[2] = tvHdr, tvAlr, tvBody
+			gsmFlex := tview.NewFlex().SetDirection(tview.FlexRow).
+				AddItem(tvHdr, 1, 0, false).
+				AddItem(tvAlr, 1, 0, false).
+				AddItem(tvBody, 0, 1, false)
+			gsmFlex.SetBorder(true).SetTitle(" Global Situation ")
+			grid.AddItem(gsmFlex, row, col, 1, 1, 0, 0, false)
+			textViews[i] = nil
+			continue
+		}
 		if key == "crypto" {
 			// Crypto: Top | (Stablecoins | Gainers/Losers); Crypto News | BTC ETF
 			tvTop := tview.NewTextView().SetDynamicColors(true).SetText(renderCryptoTop(baseURL, 1))
@@ -886,15 +973,19 @@ func main() {
 	footer.SetBorder(false)
 	grid.AddItem(footer, rows, 0, 1, cols, 0, 0, false)
 
-	// Find which grid slot is the weather panel and which is crypto (own tickers)
+	// Find which grid slot is weather, crypto, or GSM (each has its own refresh)
 	weatherPanelIndex := -1
 	cryptoPanelIndex := -1
+	gsmPanelIndex := -1
 	for i := 0; i < n; i++ {
 		if panels[i] == "weather" {
 			weatherPanelIndex = i
 		}
 		if panels[i] == "crypto" {
 			cryptoPanelIndex = i
+		}
+		if panels[i] == "global-situation-map" {
+			gsmPanelIndex = i
 		}
 	}
 
@@ -904,7 +995,7 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			for i := 0; i < n; i++ {
-				if i == weatherPanelIndex || i == cryptoPanelIndex {
+				if i == weatherPanelIndex || i == cryptoPanelIndex || i == gsmPanelIndex {
 					continue
 				}
 				key := panels[i]
@@ -935,6 +1026,22 @@ func main() {
 						textViews[wi].SetText(c)
 					})
 				}(content)
+			}
+		}()
+	}
+
+	// Global Situation Map: refresh on main cycle; update all 3 subpanels
+	if gsmPanelIndex >= 0 && gsmSubpanelViews[0] != nil {
+		go func() {
+			ticker := time.NewTicker(time.Duration(cycleSecs) * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				hdr, alr, body, _ := fetchAndBuildGsm(baseURL)
+				app.QueueUpdateDraw(func() {
+					gsmSubpanelViews[0].SetText(hdr)
+					gsmSubpanelViews[1].SetText(alr)
+					gsmSubpanelViews[2].SetText(body)
+				})
 			}
 		}()
 	}
@@ -1016,8 +1123,8 @@ func main() {
 				app.QueueUpdateDraw(func() {
 					_, _, _, h := vStable.GetRect()
 					if h > 6 {
-						// header 2 + 2 lines per coin (status + mcap/vol)
-						p := (h - 4) / 2
+						// tile 2 lines + 1 blank + 1 line per coin
+						p := h - 2 - 3
 						if p >= 1 && p <= 20 {
 							ch <- p
 						} else {

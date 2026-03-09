@@ -1,56 +1,56 @@
 # Handoff: Pi Terminal World Monitor – progress and next steps
 
-Use this document to continue development with a new agent or session. It summarizes what’s done, how to run everything, and what was changed in the last session so the next agent has full context.
+Use this document to continue development with a new agent or session. It summarizes what’s done, how to run everything, and what was changed so the next agent has full context.
 
 ---
 
 ## Session summary (for next agent)
 
-**Context:** The previous session implemented the crypto dashboard (top cryptos, stablecoins, crypto news, BTC ETF Tracker), made the top-cryptos panel resolution-aware with a static title and 8s cycle, and finished the BTC ETF Tracker UI with stub data, aligned columns, all ETFs in one view, and a 6s refresh timer. Below is the full list of changes; **do not re-implement these**—they are done.
+**Context:** This session completed the crypto dashboard: real crypto news with descriptions and cycling; stablecoins area split into Stablecoins + Gainers/Losers panels; top cryptos extended to 56; stablecoins tile layout and ticker-only list with 8s paging; gainers/losers with 24h change % and 12-per-page cycle. **Do not re-implement these**—they are done. **Next focus: Global Situation Map** (see “Next steps” and “Global Situation Map” below).
 
 ### Backend changes (all in `backend/app/panels.py`)
 
 - **Crypto top (`GET /panels/crypto/top`)**  
-  - **Single fetch for 33 coins:** `_fetch_top33_coins()` requests page 1, per_page 33 from CoinGecko once; all three “pages” (1–11, 12–22, 23–33) are sliced from this list to avoid rate limits.  
-  - **Query params:** `range_start` (1-based, e.g. 1, 12, 23) and **`per_page`** (optional, default 11, clamped 5–25). Client uses `per_page` for resolution-aware line count.  
-  - **Price changes:** Request uses `price_change_percentage=1h,24h,7d`; response includes `price_1h_pct`, `price_24h_pct`, `price_7d_pct`.  
-  - **Caching:** Only non-empty results are cached; empty/rate-limited responses are not cached so the next request retries. One retry with 1s delay on failure.
+  - **Single fetch for 56 coins:** `_fetch_top56_coins()` requests page 1, per_page 56 from CoinGecko; client cycles pages by `range_start` + `per_page` (5–25).  
+  - **Query params:** `range_start` (1-based), `per_page` (optional, default 11, clamped 5–25).  
+  - **Price changes:** `price_1h_pct`, `price_24h_pct`, `price_7d_pct`. Cache key `_TOP56_CACHE_KEY`, `TOP_COINS_COUNT = 56`.
 
 - **Crypto news (`GET /panels/crypto/news`)**  
-  - Fetches CoinDesk RSS (URL without trailing slash to avoid 308). Parses with `xml.etree.ElementTree`; `text_of()` handles CDATA. Returns `{ "status", "source": "rss", "items": [ { "title", "link", "pub_date", "description" } ] }`. `description` is the article blurb (from RSS `<description>`). Cached 5 min (`_crypto_news_cache`).
+  - CoinDesk RSS; `text_of()` uses `itertext()` so CDATA is included. **Keep first non-empty `description`** (do not overwrite by empty `dc:description`). Returns `title`, `link`, `pub_date`, `description` (blurb). Cached 5 min.
+
+- **Crypto stablecoins (`GET /panels/crypto/stablecoins`)**  
+  - Fetches with `price_change="24h"`. Per-coin: `symbol`, `name`, `price`, `peg_status`, `deviation_pct`, `market_cap_b`, `volume_b`, `price_change_24h_pct`. `STABLECOIN_IDS` includes FDUSD (first-digital-usd). Response used for **tile** (status + MCap | Vol) and **ticker list only** (no per-ticker mcap/vol in client).
+
+- **Crypto gainers-losers (`GET /panels/crypto/gainers-losers`)**  
+  - Top 28 gainers and 28 losers by 24h price change (from top 100 mcap, excluding stablecoins). Each entry: `symbol`, `price`, **`change_24h_pct`**. Cached in `_crypto_cache`.
 
 - **BTC ETF (`GET /panels/crypto/btc-etf`)**  
-  - **Stub data** in `BTC_ETF_STUB`: 10 ETFs (IBIT, FBTC, ARKB, BITB, GBTC, HODL, BRRR, EZBC, BTCO, BTCW) with `ticker`, `issuer`, `est_flow_m`, `volume_m`, `change_pct`.  
-  - Response: `net_flow_label` ("NET OUTFLOW" / "NET INFLOW"), `est_flow_m`, `total_vol_m`, `etfs_up`, `etfs_down`, `etfs[]`.  
-  - Real data source (e.g. Farside/Blockworks) to be wired later; replace `_btc_etf_stub()`.
+  - Stub data; same response shape. Real source to be wired later.
 
 ### Go client changes (all in `client-go/main.go`)
 
-- **Top Cryptos sub-panel**  
-  - **Static title:** Always `" Top cryptos by mcap (8s) "` (no range in title).  
-  - **8s cycle:** Page advances every 8 seconds; countdown in title 8→7→…→1 then flip.  
-  - **Resolution-aware lines:** On refresh, client gets panel height via `vTop.GetRect()` inside `app.QueueUpdateDraw()`, computes `linesPerPage = height - 2` (clamped 5–25), builds `rangeStarts` (e.g. for 11: [1,12,23]; for 14: [1,15,29]), and calls `/panels/crypto/top?range_start=%d&per_page=%d`. So the number of rows shown matches the panel height on different monitors (16" 1600p vs 27" 1440p).  
-  - **API:** `renderCryptoTopWithRange(baseURL, rangeStart, perPage)`; backend returns `range` string (e.g. "1-11") but title no longer uses it.
+- **Crypto panel layout**  
+  - **5 sub-panels:** Top row = Top Cryptos | (Stablecoins | Gainers/Losers); bottom row = Crypto News | BTC ETF. `cryptoSubpanelViews[0..4]`.
+
+- **Top Cryptos**  
+  - **56 coins;** 8s cycle; resolution-aware `perPage` from `vTop.GetRect()` (clamped 5–25). `rangeStarts` built from `topCoinsCount = 56`. `renderCryptoTopWithRange(baseURL, rangeStart, perPage)`.
 
 - **Stablecoins**  
-  - Unchanged: 6s refresh; no paging.
+  - **Timer 8s** in title. **Tile:** line 1 = status (Healthy/Caution), line 2 = `MCap: $x.xB | Vol: $x.xB`. **Tickers only:** one line per coin = ticker, $price (2 decimals), ON PEG/OFF PEG, deviation %. No per-ticker MCap/Vol/change. **Paging:** like Top Cryptos; `perPage = (height - 2 - 3)` (tile 2 + blank); cycle pages every 8s. `renderCryptoStablecoinsPageFromData()`, `renderCryptoStablecoinsPage()`.
+
+- **Crypto gainers / losers**  
+  - **12 per page.** Cycle every 10s: gainers 0–11 → gainers 12–23 → losers 0–11 → losers 12–23 (phase 0–3). **Change %** next to price (green gainers, red losers). `gainersLosersPerPage = 12`. `renderCryptoGainersLosers(baseURL, showGainers, pageStart, perPage)`; struct `Change24hPct *float64`.
 
 - **Crypto News**  
-  - **Two headlines + descriptions per cycle:** Each page shows two articles (headline + blurb each), with a **separator line** (`───…`) between them. Headlines **wrap** to panel width (no truncation with "..."). **20s timer** in title; pool refresh every 6s. Uses `renderCryptoNewsTwoItems()` and `renderCryptoNewsOneArticle()`; advances by 2 items per cycle.
+  - 20s cycle; **two articles per page**; headline + blurb each; **em dash** separator between articles. Pool refresh every 6s. `renderCryptoNewsTwoItems()`, `renderCryptoNewsOneItem()`, `fetchCryptoNewsItems()`.
 
-- **BTC ETF Tracker sub-panel**  
-  - **All ETFs at once:** No paging; `renderCryptoBtcEtfAll(baseURL)` renders header + full `etfs[]` list.  
-  - **Refresh and timer:** Data refreshes every **6 seconds**; title is `" BTC ETF Tracker (6s) "` with live countdown 6→5→…→1, then refresh and reset to 6.  
-  - **Alignment:** Fixed-width columns so header and data align: TICKER 6, ISSUER 15, EST. FLOW 11, VOLUME 8, CHANGE 8. Constants `btcColTicker`, `btcColIssuer`, etc. First header row uses a first block width of `btcColTicker+1+btcColIssuer` so "Est. Flow", "Total Vol", "ETFs" align with columns.  
-  - **Response struct:** `cryptoBtcEtfResp` has `NetFlowLabel`, `EstFlowM`, `TotalVolM`, `EtfsUp`, `EtfsDown`, `Etfs []cryptoBtcEtfEntry`; each entry has `Ticker`, `Issuer`, `EstFlowM`, `VolumeM`, `ChangePct`. Format helpers: `formatBtcEtfFlow`, `formatBtcEtfVol`.
-
-- **Price formatting (top cryptos)**  
-  - `fmtPrice()`: commas and two decimals for prices ≥ 1 (e.g. $66,825.00); smaller values as before.
+- **BTC ETF Tracker**  
+  - 6s refresh, countdown in title; all ETFs at once; fixed-width columns. Unchanged.
 
 ### Docs and deploy
 
-- **AGENTS.md:** Rule added: when changes require deploy, give user (1) local commit/push with a **relevant commit message**, (2) VPS pull-and-restart commands.  
-- **HANDOFF-PROGRESS.md:** “Deploy workflow” section with push/pull/restart steps and **port 8000 in use** handling: `sudo lsof -i :8000`, `sudo kill -9 <PID>`, optional one-liner with `sleep 2`.
+- **AGENTS.md:** When changes require deploy, give (1) local commit/push with relevant message, (2) VPS pull-and-restart commands.  
+- **Deploy workflow** in this doc: port 8000 kill, pull, uvicorn restart.
 
 ---
 
@@ -59,38 +59,32 @@ Use this document to continue development with a new agent or session. It summar
 ### Done
 
 - **Repo and layout**  
-  - Public GitHub repo; backend (Python/FastAPI) and two clients (Go recommended, Python alternative).  
-  - OpenSpec change in `openspec/changes/add-pi-terminal-world-monitor-client/`; `tasks.md` updated with completed items.
+  - Backend (Python/FastAPI), Go client (recommended), Python client (alternative). OpenSpec in `openspec/changes/add-pi-terminal-world-monitor-client/`.
 
-- **Backend (VPS)**  
-  - **Endpoints:** `GET /health`, `GET /panels`, `GET /panels/world-clock`, `GET /panels/weather`, `GET /panels/global-situation-map`, `GET /panels/crypto/top`, `GET /panels/crypto/stablecoins`, `GET /panels/crypto/news`, `GET /panels/crypto/btc-etf`.  
-  - **Crypto top:** One CoinGecko request for top 33; slice by `range_start` + `per_page` (5–25). 1h/24h/7d price change; cache only non-empty; retry once.  
-  - **Crypto news:** CoinDesk RSS, 5 min cache.  
-  - **BTC ETF:** Stub returning 10 ETFs with header (net flow, est flow, total vol, etfs up/down); ready for real source.  
-  - **Deployed:** DigitalOcean **209.38.141.129** (Ubuntu 24.10). Run: `cd /opt/pi-terminal-world-monitor-client/backend && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000`. After backend code changes: `git pull` on droplet then restart uvicorn (see “Deploy workflow” below).
+- **Backend (VPS 209.38.141.129)**  
+  - **Endpoints:** `GET /health`, `GET /panels`, `GET /panels/world-clock`, `GET /panels/weather`, `GET /panels/global-situation-map`, `GET /panels/crypto/top`, `GET /panels/crypto/stablecoins`, `GET /panels/crypto/news`, `GET /panels/crypto/gainers-losers`, `GET /panels/crypto/btc-etf`.  
+  - **Crypto top:** 56 coins, slice by `range_start` + `per_page` (5–25), 1h/24h/7d.  
+  - **Crypto news:** CoinDesk RSS, description (blurb), 5 min cache.  
+  - **Stablecoins:** status_label, market_cap_b, volume_b, per-coin peg + optional mcap/vol/24h (client uses tile + tickers only).  
+  - **Gainers-losers:** 28 gainers, 28 losers, `symbol`, `price`, `change_24h_pct`.  
+  - **BTC ETF:** Stub; ready for real source.
 
-- **Go client (recommended)**  
-  - **Build:** `cd client-go && go mod tidy && go build -o pi-world-monitor-client .`  
-  - **Env:** `BACKEND_URL`, `CYCLE_SECONDS` (default 8), `GRID_COLS` / `GRID_ROWS` (default 2×2). Press **Q** to quit.  
-  - **Crypto panel (top-left slot):** 5 sub-panels. **Top row:** Top Cryptos | (Stablecoins | Gainers/Losers). **Bottom row:** Crypto News | BTC ETF.  
-    1. **Top Cryptos** – 8s cycle, resolution-aware, 33 coins in rotation.  
-    2. **Stablecoins** – **Timer in title** (6s); HEALTHY/Caution, MCap | Vol; **PEG HEALTH** (symbol, name, price, ON PEG %); **SUPPLY & VOLUME** (symbol, MCap, 24h Vol, 24h Chg green/red).  
-    3. **Crypto gainers / losers** – **Cycle every 10s** between “Crypto gainers” and “Crypto losers”; 28 each, ticker + price; **green** for gainers, **red** for losers; timer in title.  
-    4. **Crypto News** – 20s cycle, two articles per page, em dash separator.  
-    5. **BTC ETF Tracker** – 6s refresh, countdown in title; fixed-width columns.  
-  - Weather Watch, Global Situation Map, World Clock unchanged; all use QueueUpdateDraw.
-
-- **Python client**  
-  - `client/`: alternative; run with venv and `BACKEND_URL`.
+- **Go client**  
+  - **Build:** `cd client-go && go build -o pi-world-monitor-client .`  
+  - **Env:** `BACKEND_URL`, `CYCLE_SECONDS`, `GRID_COLS` / `GRID_ROWS`. Press **Q** to quit.  
+  - **Crypto panel:** 5 sub-panels (Top Cryptos 56/8s | Stablecoins 8s + Gainers/Losers 10s; News 20s | BTC ETF 6s).  
+  - **Weather, World Clock:** use `panelContent()` and grid refresh on main cycle. **Global Situation Map:** 3 subpanels (header, alerts, layers+regions), own refresh on main cycle.
 
 - **Deployment and docs**  
-  - docs/DEPLOY-BACKEND.md, INSTALL-PI.md, contrib/systemd/, AGENTS.md (deploy rule).
+  - docs/DEPLOY-BACKEND.md, INSTALL-PI.md, contrib/systemd/, AGENTS.md.
 
 ### Not done
 
-- **BTC ETF real data** – Stub in place; wire Farside/Blockworks or other free source in `_btc_etf_stub()` / `crypto_btc_etf()`.  
-- **Terminal sparklines** for crypto (ASCII/Unicode mini-charts).  
-- Other panel categories; formal OpenAPI; Pi 3B validation (task 7.4).
+- **Global Situation Map real data** – Text translation (3 subpanels: header, alerts, layers+regions) and backend shape are in place; stub data only; wire real feeds when available.  
+- **BTC ETF real data** – Stub in place; wire Farside/Blockworks or similar.  
+- **Crypto sparklines** – Optional.  
+- **Pi 3B validation** – ARM build and INSTALL-PI.md.  
+- **OpenSpec** – Mark completed items; archive when feature-complete.
 
 ---
 
@@ -103,8 +97,7 @@ cd backend && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 **Go client (local or Pi):**
 ```bash
-cd client-go
-go mod tidy && go build -o pi-world-monitor-client .
+cd client-go && go build -o pi-world-monitor-client .
 export BACKEND_URL=http://209.38.141.129:8000
 ./pi-world-monitor-client
 ```
@@ -114,27 +107,23 @@ export BACKEND_URL=http://209.38.141.129:8000
 curl -s http://209.38.141.129:8000/health
 curl -s http://209.38.141.129:8000/panels
 curl -s http://209.38.141.129:8000/panels/crypto/top?range_start=1&per_page=11
-curl -s http://209.38.141.129:8000/panels/crypto/btc-etf
+curl -s http://209.38.141.129:8000/panels/global-situation-map
 ```
 
 ---
 
 ## Deploy workflow: push and restart backend
 
-When **backend** code changes and the user needs to deploy:
+When **backend** code changes:
 
-**1. Local: commit and push with a relevant commit message** (not generic “Updates”).  
-**2. VPS: pull and restart.** If port 8000 is in use: `sudo lsof -i :8000`, then `sudo kill -9 <PID>`, then:
+**1. Local:** commit and push with a **relevant commit message**.  
+**2. VPS:** pull and restart. If port 8000 is in use:
 
 ```bash
 sudo kill -9 $(sudo lsof -t -i :8000) 2>/dev/null; sleep 2; cd /opt/pi-terminal-world-monitor-client && git pull && cd backend && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-If the backend is managed by systemd: `systemctl restart pi-world-monitor` (or the actual service name).
-
-**Rule for agents:** When your changes require the user to push and restart the backend, always give (1) the exact commit message suggestion and (2) the VPS commands. See AGENTS.md.
-
-**Note:** Client-only changes (e.g. BTC ETF “all at once” + timer) do **not** require backend push/restart; user only rebuilds and runs the Go client.
+Client-only changes: just rebuild and run the Go client.
 
 ---
 
@@ -142,7 +131,7 @@ If the backend is managed by systemd: `systemctl restart pi-world-monitor` (or t
 
 | Path | Purpose |
 |------|--------|
-| `backend/` | FastAPI app; `app/main.py`, `app/panels.py`; runs on VPS |
+| `backend/` | FastAPI app; `app/main.py`, `app/panels.py` |
 | `client-go/` | Go + tview client; **recommended** |
 | `client/` | Python + blessed client; alternative |
 | `docs/` | DEPLOY-BACKEND.md, INSTALL-PI.md, **HANDOFF-PROGRESS.md** (this file) |
@@ -151,38 +140,49 @@ If the backend is managed by systemd: `systemctl restart pi-world-monitor` (or t
 
 ---
 
-## Backend API reference (crypto)
+## Backend API reference (crypto + GSM)
 
 - **`GET /panels/crypto/top?range_start=1&per_page=11`**  
-  Response: `{ "status", "source", "range": "1-11", "coins": [ { "rank", "symbol", "name", "price", "price_1h_pct", "price_24h_pct", "price_7d_pct" } ] }`.  
-  Single internal fetch of 33; slice by `range_start` and `per_page` (5–25).
+  `{ "status", "source", "range", "coins": [ { "rank", "symbol", "name", "price", "price_1h_pct", "price_24h_pct", "price_7d_pct" } ] }` — 56 coins total; slice by params.
 
 - **`GET /panels/crypto/stablecoins`**  
-  `{ "status", "status_label", "market_cap_b", "volume_b", "coins": [ { "symbol", "name", "price", "peg_status", "deviation_pct", "market_cap_b", "volume_b", "price_change_24h_pct" } ] }` — PEG HEALTH + SUPPLY & VOLUME layout.
+  `{ "status", "status_label", "market_cap_b", "volume_b", "coins": [ { "symbol", "name", "price", "peg_status", "deviation_pct", "market_cap_b", "volume_b", "price_change_24h_pct" } ] }` — Client uses tile (status + MCap\|Vol) and ticker list only.
 
 - **`GET /panels/crypto/gainers-losers`**  
-  `{ "status", "gainers": [ { "symbol", "price" } ], "losers": [ { "symbol", "price" } ] }` — 28 gainers and 28 losers by 24h change (from top 100 mcap, excluding stablecoins).
+  `{ "status", "gainers": [ { "symbol", "price", "change_24h_pct" } ], "losers": [ ... ] }` — 28 each.
 
 - **`GET /panels/crypto/news`**  
-  `{ "status", "source": "rss", "items": [ { "title", "link", "pub_date", "description" } ] }` — `description` is the article blurb from RSS.
+  `{ "status", "source": "rss", "items": [ { "title", "link", "pub_date", "description" } ] }`
 
 - **`GET /panels/crypto/btc-etf`**  
-  `{ "status", "source": "stub", "net_flow_label", "est_flow_m", "total_vol_m", "etfs_up", "etfs_down", "etfs": [ { "ticker", "issuer", "est_flow_m", "volume_m", "change_pct" } ] }`
+  Stub: `net_flow_label`, `est_flow_m`, `total_vol_m`, `etfs_up`, `etfs_down`, `etfs[]`.
+
+- **`GET /panels/global-situation-map`**  
+  `{ "status", "source", "defcon", "defcon_pct", "time_window", "updated_utc", "summary": { "high", "elevated", "monitoring": [] }, "layers": [ { "id", "name", "icon", "active", "locations" } ], "regions": [ { "name", "severity", "events" } ] }` — Client renders as 3 subpanels (header, alerts, layers+regions).
+
+---
+
+## Global Situation Map (text translation)
+
+- **Backend:** `backend/app/panels.py` — `GET /panels/global-situation-map` returns: `defcon`, `defcon_pct`, `time_window`, `updated_utc`, `summary` (high/elevated/monitoring location lists), `layers[]` (id, name, icon, active, locations), `regions[]` (name, severity, events). Layer definitions in `GSM_LAYER_DEFS` (all layers from UI; stub data uses a subset with locations).  
+- **Client:** `client-go/main.go` — Global Situation panel uses **3 subpanels** in one quadrant: (1) header line: time window, DEFCON, updated UTC; (2) alerts by level: High / Elevated / Monitoring with location lists, color-coded; (3) Layers (one line per active layer with locations) and Regions (severity + events). `fetchAndBuildGsm`, `buildGsmHeader`, `buildGsmAlerts`, `buildGsmLayersRegions`. GSM refreshes on main cycle like other panels.  
+- **Intent:** Text translation of the map: same information (alert levels, layers, regions) without exceeding the panel quadrant; real data pipeline can replace stub later.
 
 ---
 
 ## Next steps (for the next agent)
 
-1. **BTC ETF real data** – Replace `_btc_etf_stub()` with a free source (e.g. Farside Investors data via Blockworks or similar); keep same response shape.  
-2. **Crypto sparklines** – Optional ASCII/Unicode sparklines for top cryptos (e.g. CoinGecko `market_chart` + backend series + client render).  
-3. **Pi 3B validation (task 7.4)** – Build Go client for ARM (`GOOS=linux GOARCH=arm GOARM=7`), test on DietPi; update INSTALL-PI.md if needed.  
-4. **OpenSpec** – Mark completed items in `openspec/changes/.../tasks.md`; when feature-complete, use `/opsx:archive` (or project workflow).
+1. **Global Situation Map** – Text translation done (header, alerts by level, layers+regions in 3 subpanels). Stub data; next: wire real feeds and optional time-window/defcon API.  
+2. **BTC ETF real data** – Replace stub with Farside/Blockworks or similar; keep response shape.  
+3. **Crypto sparklines** – Optional ASCII/Unicode for top cryptos.  
+4. **Pi 3B validation** – ARM build, test on DietPi, update INSTALL-PI.md.  
+5. **OpenSpec** – Update tasks.md; archive when complete.
 
 ---
 
 ## Reference
 
-- **OpenSpec change:** `openspec/changes/add-pi-terminal-world-monitor-client/` (proposal.md, design.md, tasks.md, specs/).  
+- **OpenSpec change:** `openspec/changes/add-pi-terminal-world-monitor-client/`  
 - **World Monitor (inspiration):** https://github.com/koala73/worldmonitor  
 - **tview:** https://github.com/rivo/tview  
 - **Backend droplet:** 209.38.141.129 (Ubuntu 24.10).
