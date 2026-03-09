@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from cachetools import TTLCache
@@ -567,12 +568,24 @@ def _fetch_crypto_news() -> dict[str, Any]:
             r = client.get(CRYPTO_NEWS_RSS_URL)
             r.raise_for_status()
             root = ET.fromstring(r.text)
-        # RSS 2.0: channel -> item; handle default ns; use itertext() so CDATA is included
+        # RSS 2.0: channel -> item; use itertext() so CDATA is included
         def text_of(el: ET.Element) -> str:
             parts = list(el.itertext()) if el.itertext() else []
             if parts:
                 return "".join(parts).strip()
             return (el.text or "").strip()
+
+        # Source resolution: feed title -> entry link hostname -> feed URL hostname
+        feed_title: str | None = None
+        for ch in root.iter():
+            if ch.tag.endswith("channel"):
+                for child in ch:
+                    if child.tag.endswith("title"):
+                        t = text_of(child)
+                        if t:
+                            feed_title = t[:60].strip()
+                        break
+                break
 
         for tag in root.iter():
             if tag.tag.endswith("item"):
@@ -604,11 +617,18 @@ def _fetch_crypto_news() -> dict[str, Any]:
                     if description and "<" in description:
                         description = re.sub(r"<[^>]+>", " ", description)
                         description = " ".join(description.split())
+                    source = (
+                        feed_title
+                        or _source_from_url(link)
+                        or _source_from_url(CRYPTO_NEWS_RSS_URL)
+                        or "CoinDesk"
+                    )
                     items.append({
                         "title": title[:120],
                         "link": link,
                         "pub_date": pub_date,
                         "description": (description[:800] if description else "").strip(),
+                        "source": source,
                     })
                 if len(items) >= CRYPTO_NEWS_MAX_ITEMS:
                     break
@@ -628,25 +648,42 @@ def crypto_news():
         return {"status": "error", "source": "rss", "items": [], "message": "News temporarily unavailable."}
 
 
-# --- News panel: 8 feeds (World, US, Europe, Middle East, Africa, Latin America, Asia-Pacific, Government) ---
-NEWS_FEEDS: list[tuple[str, str, str]] = [
-    ("world", "World News", "https://feeds.bbci.co.uk/news/world/rss.xml"),
-    ("us", "United States", "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml"),
-    ("europe", "Europe", "https://rss.dw.com/xml/rss-en-eu"),
-    ("middle-east", "Middle East", "https://www.aljazeera.com/xml/rss/all.xml"),
-    ("africa", "Africa", "https://feeds.bbci.co.uk/news/world/africa/rss.xml"),
-    ("latin-america", "Latin America", "https://feeds.bbci.co.uk/news/world/latin_america/rss.xml"),
-    ("asia-pacific", "Asia-Pacific", "https://feeds.bbci.co.uk/news/world/asia/rss.xml"),
-    ("government", "Government", "https://feeds.bbci.co.uk/news/politics/rss.xml"),
+def _source_from_url(url: str | None) -> str | None:
+    """Derive outlet name from URL hostname (www. stripped). Used when feed title is missing."""
+    if not url:
+        return None
+    try:
+        host = urlparse(url).netloc
+        if host.startswith("www."):
+            host = host[4:]
+        return host or None
+    except Exception:
+        return None
+
+
+# --- News panel: 8 feeds (id, panel_title, url, outlet) — outlet = news org that publishes the feed ---
+NEWS_FEEDS: list[tuple[str, str, str, str]] = [
+    ("world", "World News", "https://feeds.bbci.co.uk/news/world/rss.xml", "BBC"),
+    ("us", "United States", "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml", "BBC"),
+    ("europe", "Europe", "https://rss.dw.com/xml/rss-en-eu", "DW"),
+    ("middle-east", "Middle East", "https://www.aljazeera.com/xml/rss/all.xml", "Al Jazeera"),
+    ("africa", "Africa", "https://feeds.bbci.co.uk/news/world/africa/rss.xml", "BBC"),
+    ("latin-america", "Latin America", "https://feeds.bbci.co.uk/news/world/latin_america/rss.xml", "BBC"),
+    ("asia-pacific", "Asia-Pacific", "https://feeds.bbci.co.uk/news/world/asia/rss.xml", "BBC"),
+    ("government", "Government", "https://feeds.bbci.co.uk/news/politics/rss.xml", "BBC"),
 ]
 NEWS_MAX_ITEMS_PER_FEED = 15
 NEWS_NEW_HOURS = 6  # items published in last N hours count as "new" in backlog
 
 
 def _parse_rss_feed(
-    xml_text: str, source_name: str, max_items: int, cutoff_utc: datetime | None
+    xml_text: str,
+    fallback_source: str,
+    feed_url: str | None,
+    max_items: int,
+    cutoff_utc: datetime | None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Parse RSS XML; return (items, new_count). new_count = items with pub_date >= cutoff_utc."""
+    """Parse RSS XML; return (items, new_count). Source = feed title, else entry link hostname, else feed URL hostname, else fallback."""
     items: list[dict[str, Any]] = []
     new_count = 0
 
@@ -660,6 +697,18 @@ def _parse_rss_feed(
         root = ET.fromstring(xml_text)
     except Exception:
         return [], 0
+
+    # Use RSS <channel><title> as outlet (e.g. "BBC News - World") so we show the actual news org
+    feed_source = fallback_source
+    for ch in root.iter():
+        if ch.tag.endswith("channel"):
+            for child in ch:
+                if child.tag.endswith("title"):
+                    t = text_of(child)
+                    if t:
+                        feed_source = t[:60].strip()
+                    break
+            break
 
     for tag in root.iter():
         if tag.tag.endswith("item"):
@@ -688,12 +737,18 @@ def _parse_rss_feed(
                 if description and "<" in description:
                     description = re.sub(r"<[^>]+>", " ", description)
                     description = " ".join(description.split())
+                source = (
+                    feed_source
+                    or _source_from_url(link)
+                    or _source_from_url(feed_url)
+                    or fallback_source
+                )
                 item = {
                     "title": title[:200],
                     "link": link,
                     "pub_date": pub_date,
                     "description": (description[:800] if description else "").strip(),
-                    "source": source_name,
+                    "source": source,
                 }
                 items.append(item)
                 if cutoff_utc and pub_date:
@@ -713,7 +768,7 @@ def _parse_rss_feed(
 
 
 def _fetch_one_news_feed(
-    feed_id: str, name: str, url: str, cutoff_utc: datetime | None
+    feed_id: str, name: str, url: str, outlet: str, cutoff_utc: datetime | None
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "id": feed_id,
@@ -726,7 +781,7 @@ def _fetch_one_news_feed(
             r = client.get(url)
             r.raise_for_status()
             items, new_count = _parse_rss_feed(
-                r.text, name, NEWS_MAX_ITEMS_PER_FEED, cutoff_utc
+                r.text, outlet, url, NEWS_MAX_ITEMS_PER_FEED, cutoff_utc
             )
             out["items"] = items
             out["new_count"] = new_count
@@ -744,8 +799,8 @@ def _fetch_news() -> dict[str, Any]:
     feeds_out: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = {
-            executor.submit(_fetch_one_news_feed, fid, name, url, cutoff): fid
-            for fid, name, url in NEWS_FEEDS
+            executor.submit(_fetch_one_news_feed, fid, name, url, outlet, cutoff): fid
+            for fid, name, url, outlet in NEWS_FEEDS
         }
         for fut in as_completed(futures):
             try:
@@ -754,7 +809,7 @@ def _fetch_news() -> dict[str, Any]:
                 pass
     # Keep feed order
     by_id = {f["id"]: f for f in feeds_out}
-    feeds_ordered = [by_id[fid] for fid, _n, _u in NEWS_FEEDS if fid in by_id]
+    feeds_ordered = [by_id[fid] for fid, _n, _u, _o in NEWS_FEEDS if fid in by_id]
     out = {"status": "ok", "source": "rss", "feeds": feeds_ordered}
     _news_cache[cache_key] = out
     return out

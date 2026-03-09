@@ -63,9 +63,9 @@ Use this document to continue development with a new agent or session. It summar
 
 - **Backend (VPS 209.38.141.129)**  
   - **Endpoints:** `GET /health`, `GET /panels`, `GET /panels/world-clock`, `GET /panels/weather`, `GET /panels/news`, `GET /panels/global-situation-map` (kept for future), `GET /panels/crypto/*`, …  
-  - **News:** `GET /panels/news` — 8 feeds: World News, United States (BBC US/Canada), Europe, Middle East, Africa, **Latin America**, Asia-Pacific, Government. Each feed: `id`, `name`, `new_count` (items in last 6h), `items[]` (title, link, pub_date, description, source). RSS, 5 min cache.  
+  - **News:** `GET /panels/news` — 8 feeds: World News, United States (BBC US/Canada), Europe, Middle East, Africa, **Latin America**, Asia-Pacific, Government. Each feed: `id`, `name`, `new_count` (items in last 6h), `items[]` (title, link, pub_date, description, **source** = outlet: feed title → entry link hostname → feed URL hostname). RSS, 5 min cache.  
   - **Crypto top:** 56 coins, slice by `range_start` + `per_page` (5–25), 1h/24h/7d.  
-  - **Crypto news:** CoinDesk RSS, description (blurb), 5 min cache.  
+  - **Crypto news:** CoinDesk RSS; each item has **source** (feed title → link hostname → feed URL hostname), description (blurb). 5 min cache.  
   - **Stablecoins:** status_label, market_cap_b, volume_b, per-coin peg + optional mcap/vol/24h (client uses tile + tickers only).  
   - **Gainers-losers:** 28 gainers, 28 losers, `symbol`, `price`, `change_24h_pct`.  
   - **BTC ETF:** Stub; ready for real source.
@@ -87,6 +87,41 @@ Use this document to continue development with a new agent or session. It summar
 - **Crypto sparklines** – Optional.  
 - **Pi 3B validation** – ARM build and INSTALL-PI.md.  
 - **OpenSpec** – Mark completed items; archive when feature-complete.
+
+---
+
+## SSH and running the client (backend on droplet)
+
+**1. SSH into the VPS**
+```bash
+ssh root@209.38.141.129
+```
+(Use your key or password as configured.)
+
+**2. Will the backend stay up?**  
+- If you start the backend **in the foreground** in an SSH session and then close SSH, the process will exit.  
+- For it to **remain up** after you disconnect, either:
+  - Run it in the background, e.g.  
+    `cd /opt/pi-terminal-world-monitor-client/backend && nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 &`  
+  - Or use **systemd** (see docs/DEPLOY-BACKEND.md) so it survives reboot and SSH disconnect.
+
+**3. Start the client on your machine (backend already running on droplet)**
+
+From your **local** repo (not inside SSH). If you're already in the repo root (e.g. `~/pi-terminal-world-monitor-client`):
+
+```bash
+cd client-go
+go build -o pi-world-monitor-client .
+export BACKEND_URL=http://209.38.141.129:8000
+./pi-world-monitor-client
+```
+
+Or one line from repo root:
+```bash
+cd client-go && go build -o pi-world-monitor-client . && BACKEND_URL=http://209.38.141.129:8000 ./pi-world-monitor-client
+```
+
+Press **Q** to quit the client. The backend on the droplet keeps running (if you left it running in the background or under systemd).
 
 ---
 
@@ -157,7 +192,7 @@ Client-only changes: just rebuild and run the Go client.
   `{ "status", "gainers": [ { "symbol", "price", "change_24h_pct" } ], "losers": [ ... ] }` — 28 each.
 
 - **`GET /panels/crypto/news`**  
-  `{ "status", "source": "rss", "items": [ { "title", "link", "pub_date", "description" } ] }`
+  `{ "status", "source": "rss", "items": [ { "title", "link", "pub_date", "description", "source" } ] }` — `source` = feed title → link hostname → feed URL.
 
 - **`GET /panels/crypto/btc-etf`**  
   Stub: `net_flow_label`, `est_flow_m`, `total_vol_m`, `etfs_up`, `etfs_down`, `etfs[]`.
@@ -175,9 +210,16 @@ Client-only changes: just rebuild and run the Go client.
 
 ---
 
+## News panel: real news outlet (done)
+
+Each headline's **source** is now the **actual news outlet**. Priority: (1) Feed title from `<channel><title>`, (2) entry link hostname, (3) feed URL hostname. Backend: `_source_from_url(url)`; `_parse_rss_feed(..., feed_url, ...)`; crypto news uses same resolution. Client unchanged.
+
+
+---
+
 ## Next steps (for the next agent)
 
-1. **News panel** – Done (8 feeds, 4+4 layout, 10s cycle, X NEW backlog, headline+blurb per panel). **Global Situation Map** – Removed from UI; backend/docs kept for future.  
+1. **News panel** – Done (8 feeds, outlet = feed title → link hostname → feed URL; crypto news same). **Global Situation Map** – Removed from UI; backend/docs kept for future.  
 2. **BTC ETF real data** – Replace stub with Farside/Blockworks or similar; keep response shape.  
 3. **Crypto sparklines** – Optional ASCII/Unicode for top cryptos.  
 4. **Pi 3B validation** – ARM build, test on DietPi, update INSTALL-PI.md.  
