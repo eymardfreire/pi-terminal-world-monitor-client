@@ -45,12 +45,13 @@ type zoneInfo struct {
 }
 
 type weatherLoc struct {
-	Name       string `json:"name"`
-	Temp       string `json:"temp"`
-	TempHigh   string `json:"temp_high"`
-	TempLow    string `json:"temp_low"`
-	Conditions string `json:"conditions"`
-	WeatherCode int   `json:"weather_code"`
+	Name        string `json:"name"`
+	Temp        string `json:"temp"`
+	TempHigh    string `json:"temp_high"`
+	TempLow     string `json:"temp_low"`
+	Conditions  string `json:"conditions"`
+	WeatherCode int    `json:"weather_code"`
+	Timezone    string `json:"timezone"`
 }
 
 type weatherContinent struct {
@@ -59,10 +60,24 @@ type weatherContinent struct {
 }
 
 type weatherResp struct {
-	Status     string              `json:"status"`
-	Message    string              `json:"message"`
-	Continents []weatherContinent  `json:"continents"`
+	Status     string             `json:"status"`
+	Message    string             `json:"message"`
+	Continents []weatherContinent `json:"continents"`
 	Locations  []weatherLoc        `json:"locations"` // legacy flat list
+}
+
+type weatherNewsItem struct {
+	Title       string `json:"title"`
+	Link        string `json:"link"`
+	PubDate     string `json:"pub_date"`
+	Description string `json:"description"`
+	Source      string `json:"source"`
+}
+
+type weatherNewsResp struct {
+	Status string            `json:"status"`
+	Source string            `json:"source"`
+	Items  []weatherNewsItem `json:"items"`
 }
 
 type gsmRegion struct {
@@ -165,6 +180,7 @@ type cryptoNewsItem struct {
 	Link        string `json:"link"`
 	PubDate     string `json:"pub_date"`
 	Description string `json:"description"`
+	Source      string `json:"source"`
 }
 
 // News panel: 8 feeds (World, US, Europe, Middle East, Africa, Asia-Pacific, Energy, Government)
@@ -332,7 +348,17 @@ func renderWeather(baseURL string) string {
 		if lo == "" {
 			lo = "—"
 		}
-		b.WriteString(fmt.Sprintf("  %s %s %s%s°[-] (%s°/ %s°) %s\n", icon, loc.Name, tag, loc.Temp, lo, hi, loc.Conditions))
+		localTime := ""
+		if loc.Timezone != "" {
+			if tz, err := time.LoadLocation(loc.Timezone); err == nil {
+				localTime = time.Now().In(tz).Format("15:04")
+			}
+		}
+		if localTime != "" {
+			b.WriteString(fmt.Sprintf("  %s %s %s%s°[-] (%s°/ %s°) %s %s\n", icon, loc.Name, tag, loc.Temp, lo, hi, loc.Conditions, localTime))
+		} else {
+			b.WriteString(fmt.Sprintf("  %s %s %s%s°[-] (%s°/ %s°) %s\n", icon, loc.Name, tag, loc.Temp, lo, hi, loc.Conditions))
+		}
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
@@ -647,17 +673,21 @@ func fetchCryptoNewsItems(baseURL string) ([]cryptoNewsItem, error) {
 	return d.Items, nil
 }
 
-// renderCryptoNewsOneArticle appends one article (headline wrapped, no truncation + blurb) into b, up to maxLines. Returns lines used.
+// renderCryptoNewsOneArticle appends one article (headline + blurb); blurb in italic. Wrap width = width-2 so indent + line fits in panel.
 func renderCryptoNewsOneArticle(b *strings.Builder, it *cryptoNewsItem, width, maxLines int) int {
 	if maxLines <= 0 {
 		return 0
 	}
 	indent := "  "
-	// Headline: wrap to width (no ellipsis), allow multiple lines
-	titleLines := wrapLines(strings.TrimSpace(it.Title), width-2)
+	contentWidth := width - 2
+	if contentWidth < 12 {
+		contentWidth = 12
+	}
+	// Headline: title only (source on its own line so it's not cut off)
+	titleLines := wrapLines(strings.TrimSpace(it.Title), contentWidth)
 	maxTitleLines := 2
-	if maxTitleLines > maxLines-2 {
-		maxTitleLines = maxLines - 2 // need at least 1 blank + 1 blurb
+	if maxTitleLines > maxLines-3 {
+		maxTitleLines = maxLines - 3 // reserve line for source + blank
 	}
 	linesUsed := 0
 	for i, w := range titleLines {
@@ -665,8 +695,14 @@ func renderCryptoNewsOneArticle(b *strings.Builder, it *cryptoNewsItem, width, m
 			break
 		}
 		b.WriteString(indent)
-		b.WriteString(w)
+		b.WriteString(strings.TrimSpace(w))
 		b.WriteString("\n")
+		linesUsed++
+	}
+	// Source on its own line
+	if it.Source != "" {
+		b.WriteString(indent)
+		b.WriteString("(" + it.Source + ")\n")
 		linesUsed++
 	}
 	b.WriteString("\n")
@@ -674,19 +710,20 @@ func renderCryptoNewsOneArticle(b *strings.Builder, it *cryptoNewsItem, width, m
 	if linesUsed >= maxLines {
 		return linesUsed
 	}
-	blurb := it.Description
+	blurb := strings.TrimSpace(it.Description)
 	if blurb == "" {
 		blurb = "—"
 	}
-	wrapped := wrapLines(blurb, width-2)
+	wrapped := wrapLines(blurb, contentWidth)
 	remaining := maxLines - linesUsed
 	for i, w := range wrapped {
 		if i >= remaining {
 			break
 		}
 		b.WriteString(indent)
-		b.WriteString(w)
-		b.WriteString("\n")
+		b.WriteString("[::i]")
+		b.WriteString(strings.TrimSpace(w))
+		b.WriteString("[::-]\n")
 		linesUsed++
 	}
 	return linesUsed
@@ -728,8 +765,10 @@ func renderCryptoNews(baseURL string) string {
 	return renderCryptoNewsTwoItems(items, 0, 60, 24)
 }
 
-const newsPanelSecs = 25
-const newsPanelOffsetSecs = 5 // each panel's timer offset by 5s from previous (top-left to right)
+// News panel timers: first (top-left) 25s, then 30s, 35s, ... 60s so they refresh in order one at a time
+func newsPanelCycleSecs(panelIndex int) int {
+	return 25 + panelIndex*5
+}
 
 func fetchNewsFeeds(baseURL string) ([]newsFeed, error) {
 	var d newsResp
@@ -740,6 +779,69 @@ func fetchNewsFeeds(baseURL string) ([]newsFeed, error) {
 		return nil, nil
 	}
 	return d.Feeds, nil
+}
+
+func fetchWeatherNewsItems(baseURL string) ([]weatherNewsItem, error) {
+	var d weatherNewsResp
+	if err := fetchJSON(baseURL, "/panels/weather/news", &d); err != nil {
+		return nil, err
+	}
+	if d.Status != "ok" {
+		return nil, nil
+	}
+	return d.Items, nil
+}
+
+func renderWeatherNewsOneItem(it *weatherNewsItem, width, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	contentWidth := width - 2
+	if contentWidth < 12 {
+		contentWidth = 12
+	}
+	var b strings.Builder
+	indent := "  "
+	titleLines := wrapLines(strings.TrimSpace(it.Title), contentWidth)
+	maxTitleLines := 2
+	if maxTitleLines > maxLines-3 {
+		maxTitleLines = maxLines - 3
+	}
+	linesUsed := 0
+	for i, w := range titleLines {
+		if i >= maxTitleLines {
+			break
+		}
+		b.WriteString(indent)
+		b.WriteString(strings.TrimSpace(w))
+		b.WriteString("\n")
+		linesUsed++
+	}
+	if it.Source != "" {
+		b.WriteString(indent)
+		b.WriteString("(" + it.Source + ")\n")
+		linesUsed++
+	}
+	b.WriteString("\n")
+	linesUsed++
+	if linesUsed >= maxLines {
+		return strings.TrimSuffix(b.String(), "\n")
+	}
+	blurb := strings.TrimSpace(it.Description)
+	if blurb == "" {
+		blurb = "—"
+	}
+	for _, w := range wrapLines(blurb, contentWidth) {
+		if linesUsed >= maxLines {
+			break
+		}
+		b.WriteString(indent)
+		b.WriteString("[::i]")
+		b.WriteString(strings.TrimSpace(w))
+		b.WriteString("[::-]\n")
+		linesUsed++
+	}
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 // renderNewsOneArticle formats one news item as headline + blurb; description in italic, aligned for readability.
@@ -754,10 +856,11 @@ func renderNewsOneArticle(it *newsItem, width, maxLines int) string {
 	}
 	var b strings.Builder
 	indent := "  "
+	// Headline: title only; source on its own line so it's not cut off
 	titleLines := wrapLines(strings.TrimSpace(it.Title), contentWidth)
 	maxTitleLines := 2
-	if maxTitleLines > maxLines-2 {
-		maxTitleLines = maxLines - 2
+	if maxTitleLines > maxLines-3 {
+		maxTitleLines = maxLines - 3
 	}
 	linesUsed := 0
 	for i, w := range titleLines {
@@ -767,6 +870,11 @@ func renderNewsOneArticle(it *newsItem, width, maxLines int) string {
 		b.WriteString(indent)
 		b.WriteString(strings.TrimSpace(w))
 		b.WriteString("\n")
+		linesUsed++
+	}
+	if it.Source != "" {
+		b.WriteString(indent)
+		b.WriteString("(" + it.Source + ")\n")
 		linesUsed++
 	}
 	b.WriteString("\n")
@@ -1000,13 +1108,44 @@ func main() {
 		SetRows(gridRows...).
 		SetBorders(false)
 
-	// One TextView per cell (or Flex for crypto 5 sub-panels, or news 8 sub-panels 4+4)
+	// One TextView per cell (or Flex for crypto, news, or weather+world-clock split)
 	textViews := make([]*tview.TextView, n)
 	var cryptoSubpanelViews [5]*tview.TextView
 	var newsSubpanelViews [8]*tview.TextView
+	var weatherWatchView, weatherNewsView *tview.TextView
+	var worldClockPanelIndex int = -1
 	for i := 0; i < n; i++ {
 		key := panels[i]
 		row, col := i/cols, i%cols
+		if key == "weather" {
+			// Empty panel (weather moved down to world-clock slot)
+			tv := tview.NewTextView().SetDynamicColors(true).SetText("")
+			tv.SetBorder(true).SetTitle(" ")
+			textViews[i] = tv
+			grid.AddItem(tv, row, col, 1, 1, 0, 0, false)
+			continue
+		}
+		if key == "world-clock" {
+			worldClockPanelIndex = i
+			weatherWatchView = tview.NewTextView().SetDynamicColors(true)
+			weatherWatchView.SetBorder(true).SetTitle(" Weather Watch ")
+			weatherWatchView.SetText(renderWeather(baseURL))
+			weatherNewsView = tview.NewTextView().SetDynamicColors(true)
+			weatherNewsView.SetBorder(true).SetTitle(" Weather News (25s) ")
+			wnItems, _ := fetchWeatherNewsItems(baseURL)
+			if len(wnItems) > 0 {
+				weatherNewsView.SetText(renderWeatherNewsOneItem(&wnItems[0], 40, 20))
+			} else {
+				weatherNewsView.SetText("  No headlines")
+			}
+			weatherFlex := tview.NewFlex().SetDirection(tview.FlexColumn).
+				AddItem(weatherWatchView, 0, 1, false).
+				AddItem(weatherNewsView, 0, 1, false)
+			weatherFlex.SetBorder(false)
+			grid.AddItem(weatherFlex, row, col, 1, 1, 0, 0, false)
+			textViews[i] = nil
+			continue
+		}
 		if key == "news" {
 			feeds, _ := fetchNewsFeeds(baseURL)
 			for j := 0; j < 8; j++ {
@@ -1014,20 +1153,20 @@ func main() {
 				tv.SetBorder(true)
 				title := " News "
 				body := "No headlines"
-				// Initial countdown staggered: panel j shows 25 - (j*5)%25 (same as goroutine at t=0)
-				secLeft := newsPanelSecs - (j * newsPanelOffsetSecs % newsPanelSecs)
-				if secLeft == 0 {
-					secLeft = newsPanelSecs
-				}
+				secLeft := newsPanelCycleSecs(j) // at t=0 each panel shows its full cycle (25, 30, ... 60)
 				if j < len(feeds) {
 					f := &feeds[j]
 					newStr := ""
 					if f.NewCount > 0 {
 						newStr = fmt.Sprintf(" %d NEW ", f.NewCount)
 					}
-					title = fmt.Sprintf(" %s%s(%ds) ", f.Name, newStr, secLeft)
+					tit := strings.TrimSpace(f.Name)
+					if newStr != "" {
+						tit += " " + strings.TrimSpace(newStr)
+					}
+					title = " " + tit + " (" + strconv.Itoa(secLeft) + "s) "
 					if len(f.Items) > 0 {
-						body = renderNewsOneArticle(&f.Items[0], 40, 20)
+						body = renderNewsOneArticle(&f.Items[0], 50, 20)
 					}
 				}
 				tv.SetTitle(title)
@@ -1118,7 +1257,10 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			for i := 0; i < n; i++ {
-				if i == weatherPanelIndex || i == cryptoPanelIndex || i == newsPanelIndex {
+				if i == weatherPanelIndex || i == cryptoPanelIndex || i == newsPanelIndex || i == worldClockPanelIndex {
+					continue
+				}
+				if textViews[i] == nil {
 					continue
 				}
 				key := panels[i]
@@ -1136,19 +1278,54 @@ func main() {
 		}
 	}()
 
-	// Weather panel: refresh every 4s so continent cycling is visible (advances every 4s)
-	if weatherPanelIndex >= 0 {
+	// Weather Watch (in world-clock slot): refresh every 4s so continent cycling is visible
+	if weatherWatchView != nil {
 		go func() {
-			wi := weatherPanelIndex
 			ticker := time.NewTicker(4 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
-				content := panelContent(baseURL, "weather")
-				func(c string) {
-					app.QueueUpdateDraw(func() {
-						textViews[wi].SetText(c)
-					})
-				}(content)
+				content := renderWeather(baseURL)
+				app.QueueUpdateDraw(func() {
+					weatherWatchView.SetText(content)
+				})
+			}
+		}()
+	}
+
+	// Weather News (in world-clock slot): 25s cycle, 30s refresh, timer in title
+	if weatherNewsView != nil {
+		go func() {
+			items, _ := fetchWeatherNewsItems(baseURL)
+			itemIndex := 0
+			tickCount := 0
+			ticker := time.NewTicker(1 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				tickCount++
+				if tickCount%30 == 0 {
+					if newItems, err := fetchWeatherNewsItems(baseURL); err == nil && len(newItems) > 0 {
+						items = newItems
+						itemIndex = 0
+					}
+				}
+				if tickCount > 0 && tickCount%25 == 0 && len(items) > 0 {
+					itemIndex = (itemIndex + 1) % len(items)
+				}
+				secLeft := 25 - (tickCount % 25)
+				if secLeft == 25 {
+					secLeft = 25
+				}
+				title := fmt.Sprintf(" Weather News (%ds) ", secLeft)
+				var body string
+				if len(items) > 0 {
+					body = renderWeatherNewsOneItem(&items[itemIndex], 40, 20)
+				} else {
+					body = "  No headlines"
+				}
+				app.QueueUpdateDraw(func() {
+					weatherNewsView.SetTitle(title)
+					weatherNewsView.SetText(body)
+				})
 			}
 		}()
 	}
@@ -1168,10 +1345,10 @@ func main() {
 						feeds = newFeeds
 					}
 				}
-				// Per-panel: offset by 5s each (panel j effective tick = tickCount + j*5); advance when that tick is a multiple of 25
+				// Per-panel: cycle 25s, 30s, ... 60s; advance when tickCount is a multiple of that cycle
 				for j := 0; j < 8; j++ {
-					effTick := tickCount + j*newsPanelOffsetSecs
-					if effTick > 0 && effTick%newsPanelSecs == 0 {
+					cycle := newsPanelCycleSecs(j)
+					if tickCount > 0 && tickCount%cycle == 0 {
 						if j < len(feeds) && len(feeds[j].Items) > 0 {
 							itemIndices[j] = (itemIndices[j] + 1) % len(feeds[j].Items)
 						}
@@ -1183,10 +1360,17 @@ func main() {
 						if v == nil {
 							continue
 						}
-						effTick := tickCount + j*newsPanelOffsetSecs
-						secLeft := newsPanelSecs - (effTick % newsPanelSecs)
+						_, _, w, h := v.GetRect()
+						if w < 20 {
+							w = 50
+						}
+						if h < 5 {
+							h = 20
+						}
+						cycle := newsPanelCycleSecs(j)
+						secLeft := cycle - (tickCount % cycle)
 						if secLeft == 0 {
-							secLeft = newsPanelSecs
+							secLeft = cycle
 						}
 						newStr := ""
 						body := "No headlines"
@@ -1195,10 +1379,15 @@ func main() {
 							if f.NewCount > 0 {
 								newStr = fmt.Sprintf(" %d NEW ", f.NewCount)
 							}
-							v.SetTitle(fmt.Sprintf(" %s%s(%ds) ", f.Name, newStr, secLeft))
+							// Title: single spaces throughout so alignment is consistent
+							title := strings.TrimSpace(f.Name)
+							if newStr != "" {
+								title += " " + strings.TrimSpace(newStr)
+							}
+							v.SetTitle(" " + title + " (" + strconv.Itoa(secLeft) + "s) ")
 							if len(f.Items) > 0 {
 								idx := itemIndices[j] % len(f.Items)
-								body = renderNewsOneArticle(&f.Items[idx], 40, 20)
+								body = renderNewsOneArticle(&f.Items[idx], w, h-2)
 							}
 						}
 						v.SetText(body)

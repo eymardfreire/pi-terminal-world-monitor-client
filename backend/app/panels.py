@@ -27,71 +27,201 @@ _gsm_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=4, ttl=300)  # 5 mi
 _crypto_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=8, ttl=90)  # 90s for crypto (CoinGecko rate limit)
 _crypto_news_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=4, ttl=300)  # 5 min for crypto news RSS
 _news_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=2, ttl=300)  # 5 min for news feeds
+_weather_news_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=2, ttl=30)  # 30s for weather news
 
-# Top cities per continent for Weather Watch: continent -> [(name, lat, lon), ...]
-# Order defines cycle: North America → Central America → ... → Oceania → repeat
-WEATHER_BY_CONTINENT: dict[str, list[tuple[str, float, float]]] = {
+# Weather Watch: continent -> [(name, lat, lon, IANA timezone), ...]. Up to 22 cities per continent.
+WEATHER_BY_CONTINENT: dict[str, list[tuple[str, float, float, str]]] = {
     "North America": [
-        ("New York", 40.7128, -74.0060),
-        ("Los Angeles", 34.0522, -118.2437),
-        ("Chicago", 41.8781, -87.6298),
-        ("Toronto", 43.6532, -79.3832),
-        ("Miami", 25.7617, -80.1918),
-        ("Vancouver", 49.2827, -123.1207),
+        ("New York", 40.7128, -74.0060, "America/New_York"),
+        ("Los Angeles", 34.0522, -118.2437, "America/Los_Angeles"),
+        ("Chicago", 41.8781, -87.6298, "America/Chicago"),
+        ("Toronto", 43.6532, -79.3832, "America/Toronto"),
+        ("Miami", 25.7617, -80.1918, "America/New_York"),
+        ("Vancouver", 49.2827, -123.1207, "America/Vancouver"),
+        ("Houston", 29.7604, -95.3698, "America/Chicago"),
+        ("Phoenix", 33.4484, -112.0740, "America/Phoenix"),
+        ("Philadelphia", 39.9526, -75.1652, "America/New_York"),
+        ("San Francisco", 37.7749, -122.4194, "America/Los_Angeles"),
+        ("Montreal", 45.5017, -73.5673, "America/Montreal"),
+        ("Denver", 39.7392, -104.9903, "America/Denver"),
+        ("Boston", 42.3601, -71.0589, "America/New_York"),
+        ("Seattle", 47.6062, -122.3321, "America/Los_Angeles"),
+        ("Atlanta", 33.7490, -84.3880, "America/New_York"),
+        ("Dallas", 32.7767, -96.7970, "America/Chicago"),
+        ("Detroit", 42.3314, -83.0458, "America/Detroit"),
+        ("Minneapolis", 44.9778, -93.2650, "America/Chicago"),
+        ("Calgary", 51.0447, -114.0719, "America/Edmonton"),
+        ("Ottawa", 45.4215, -75.6972, "America/Toronto"),
+        ("Washington DC", 38.9072, -77.0369, "America/New_York"),
+        ("San Diego", 32.7157, -117.1611, "America/Los_Angeles"),
     ],
     "Central America": [
-        ("Mexico City", 19.4326, -99.1332),
-        ("Guatemala City", 14.6349, -90.5069),
-        ("Havana", 23.1136, -82.3666),
-        ("San José", 9.9281, -84.0907),
-        ("Panama City", 8.9824, -79.5199),
+        ("Mexico City", 19.4326, -99.1332, "America/Mexico_City"),
+        ("Guatemala City", 14.6349, -90.5069, "America/Guatemala"),
+        ("Havana", 23.1136, -82.3666, "America/Havana"),
+        ("San José", 9.9281, -84.0907, "America/Costa_Rica"),
+        ("Panama City", 8.9824, -79.5199, "America/Panama"),
+        ("Tegucigalpa", 14.0723, -87.1921, "America/Tegucigalpa"),
+        ("San Salvador", 13.6929, -89.2182, "America/El_Salvador"),
+        ("Managua", 12.1364, -86.2514, "America/Managua"),
+        ("Belmopan", 17.2514, -88.7669, "America/Belize"),
+        ("Santo Domingo", 18.4861, -69.9312, "America/Santo_Domingo"),
+        ("San Juan", 18.4655, -66.1057, "America/Puerto_Rico"),
+        ("Kingston", 17.9970, -76.7936, "America/Jamaica"),
+        ("Port-au-Prince", 18.5944, -72.3074, "America/Port-au-Prince"),
+        ("Bridgetown", 13.0970, -59.6115, "America/Barbados"),
+        ("Nassau", 25.0479, -77.3554, "America/Nassau"),
+        ("Belize City", 17.5046, -88.1962, "America/Belize"),
+        ("Cancún", 21.1619, -86.8515, "America/Cancun"),
+        ("Guadalajara", 20.6597, -103.3496, "America/Mexico_City"),
+        ("Monterrey", 25.6866, -100.3161, "America/Monterrey"),
+        ("Puebla", 19.0414, -98.2063, "America/Mexico_City"),
+        ("Oaxaca", 17.0732, -96.7266, "America/Mexico_City"),
+        ("Tijuana", 32.5149, -117.0382, "America/Tijuana"),
     ],
     "South America": [
-        ("São Paulo", -23.5505, -46.6333),
-        ("Buenos Aires", -34.6037, -58.3816),
-        ("Lima", -12.0464, -77.0428),
-        ("Bogotá", 4.7110, -74.0721),
-        ("Santiago", -33.4489, -70.6693),
-        ("Caracas", 10.4806, -66.9036),
+        ("São Paulo", -23.5505, -46.6333, "America/Sao_Paulo"),
+        ("Buenos Aires", -34.6037, -58.3816, "America/Argentina/Buenos_Aires"),
+        ("Lima", -12.0464, -77.0428, "America/Lima"),
+        ("Bogotá", 4.7110, -74.0721, "America/Bogota"),
+        ("Santiago", -33.4489, -70.6693, "America/Santiago"),
+        ("Caracas", 10.4806, -66.9036, "America/Caracas"),
+        ("Rio de Janeiro", -22.9068, -43.1729, "America/Sao_Paulo"),
+        ("Quito", -0.1807, -78.4678, "America/Guayaquil"),
+        ("La Paz", -16.5000, -68.1500, "America/La_Paz"),
+        ("Montevideo", -34.9011, -56.1645, "America/Montevideo"),
+        ("Asunción", -25.2637, -57.5759, "America/Asuncion"),
+        ("Córdoba", -31.4201, -64.1888, "America/Argentina/Cordoba"),
+        ("Medellín", 6.2476, -75.5658, "America/Bogota"),
+        ("Cali", 3.4516, -76.5320, "America/Bogota"),
+        ("Recife", -8.0476, -34.8770, "America/Recife"),
+        ("Curitiba", -25.4284, -49.2733, "America/Sao_Paulo"),
+        ("Porto Alegre", -30.0346, -51.2177, "America/Sao_Paulo"),
+        ("Cusco", -13.5319, -71.9675, "America/Lima"),
+        ("Santa Cruz", -17.7863, -63.1812, "America/La_Paz"),
+        ("Guayaquil", -2.1700, -79.8800, "America/Guayaquil"),
+        ("Cartagena", 10.3997, -75.5144, "America/Bogota"),
+        ("Sucre", -19.0196, -65.2620, "America/La_Paz"),
     ],
     "Europe": [
-        ("London", 51.5074, -0.1278),
-        ("Berlin", 52.5200, 13.4050),
-        ("Paris", 48.8566, 2.3522),
-        ("Madrid", 40.4168, -3.7038),
-        ("Rome", 41.9028, 12.4964),
-        ("Amsterdam", 52.3676, 4.9041),
+        ("London", 51.5074, -0.1278, "Europe/London"),
+        ("Berlin", 52.5200, 13.4050, "Europe/Berlin"),
+        ("Paris", 48.8566, 2.3522, "Europe/Paris"),
+        ("Madrid", 40.4168, -3.7038, "Europe/Madrid"),
+        ("Rome", 41.9028, 12.4964, "Europe/Rome"),
+        ("Amsterdam", 52.3676, 4.9041, "Europe/Amsterdam"),
+        ("Brussels", 50.8503, 4.3517, "Europe/Brussels"),
+        ("Vienna", 48.2082, 16.3738, "Europe/Vienna"),
+        ("Warsaw", 52.2297, 21.0122, "Europe/Warsaw"),
+        ("Prague", 50.0755, 14.4378, "Europe/Prague"),
+        ("Lisbon", 38.7223, -9.1393, "Europe/Lisbon"),
+        ("Athens", 37.9838, 23.7275, "Europe/Athens"),
+        ("Dublin", 53.3498, -6.2603, "Europe/Dublin"),
+        ("Copenhagen", 55.6761, 12.5683, "Europe/Copenhagen"),
+        ("Stockholm", 59.3293, 18.0686, "Europe/Stockholm"),
+        ("Oslo", 59.9139, 10.7522, "Europe/Oslo"),
+        ("Helsinki", 60.1695, 24.9355, "Europe/Helsinki"),
+        ("Budapest", 47.4979, 19.0402, "Europe/Budapest"),
+        ("Bucharest", 44.4268, 26.1025, "Europe/Bucharest"),
+        ("Moscow", 55.7558, 37.6173, "Europe/Moscow"),
+        ("Kiev", 50.4501, 30.5234, "Europe/Kyiv"),
+        ("Zurich", 47.3769, 8.5417, "Europe/Zurich"),
     ],
     "Africa": [
-        ("Cairo", 30.0444, 31.2357),
-        ("Lagos", 6.5244, 3.3792),
-        ("Johannesburg", -26.2041, 28.0473),
-        ("Nairobi", -1.2921, 36.8219),
-        ("Casablanca", 33.5731, -7.5898),
-        ("Accra", 5.6037, -0.1870),
+        ("Cairo", 30.0444, 31.2357, "Africa/Cairo"),
+        ("Lagos", 6.5244, 3.3792, "Africa/Lagos"),
+        ("Johannesburg", -26.2041, 28.0473, "Africa/Johannesburg"),
+        ("Nairobi", -1.2921, 36.8219, "Africa/Nairobi"),
+        ("Casablanca", 33.5731, -7.5898, "Africa/Casablanca"),
+        ("Accra", 5.6037, -0.1870, "Africa/Accra"),
+        ("Algiers", 36.7538, 3.0588, "Africa/Algiers"),
+        ("Tunis", 36.8065, 10.1815, "Africa/Tunis"),
+        ("Addis Ababa", 9.0320, 38.7469, "Africa/Addis_Ababa"),
+        ("Dar es Salaam", -6.7924, 39.2083, "Africa/Dar_es_Salaam"),
+        ("Kampala", 0.3476, 32.5825, "Africa/Kampala"),
+        ("Khartoum", 15.5007, 32.5599, "Africa/Khartoum"),
+        ("Abidjan", 5.3600, -4.0083, "Africa/Abidjan"),
+        ("Dakar", 14.7167, -17.4677, "Africa/Dakar"),
+        ("Abuja", 9.0765, 7.3986, "Africa/Lagos"),
+        ("Cape Town", -33.9249, 18.4241, "Africa/Johannesburg"),
+        ("Durban", -29.8587, 31.0218, "Africa/Johannesburg"),
+        ("Maputo", -25.9692, 32.5732, "Africa/Maputo"),
+        ("Lusaka", -15.3875, 28.3228, "Africa/Lusaka"),
+        ("Harare", -17.8292, 31.0522, "Africa/Harare"),
+        ("Tripoli", 32.8872, 13.1913, "Africa/Tripoli"),
+        ("Kinshasa", -4.4419, 15.2663, "Africa/Kinshasa"),
     ],
     "Middle East": [
-        ("Dubai", 25.2048, 55.2708),
-        ("Tel Aviv", 32.0853, 34.7818),
-        ("Riyadh", 24.7136, 46.6753),
-        ("Istanbul", 41.0082, 28.9784),
-        ("Tehran", 35.6892, 51.3890),
-        ("Doha", 25.2854, 51.5310),
+        ("Dubai", 25.2048, 55.2708, "Asia/Dubai"),
+        ("Tel Aviv", 32.0853, 34.7818, "Asia/Jerusalem"),
+        ("Riyadh", 24.7136, 46.6753, "Asia/Riyadh"),
+        ("Istanbul", 41.0082, 28.9784, "Europe/Istanbul"),
+        ("Tehran", 35.6892, 51.3890, "Asia/Tehran"),
+        ("Doha", 25.2854, 51.5310, "Asia/Qatar"),
+        ("Baghdad", 33.3152, 44.3661, "Asia/Baghdad"),
+        ("Kuwait City", 29.3759, 47.9774, "Asia/Kuwait"),
+        ("Amman", 31.9454, 35.9284, "Asia/Amman"),
+        ("Beirut", 33.8938, 35.5018, "Asia/Beirut"),
+        ("Damascus", 33.5138, 36.2765, "Asia/Damascus"),
+        ("Abu Dhabi", 24.4539, 54.3773, "Asia/Dubai"),
+        ("Muscat", 23.5880, 58.3829, "Asia/Muscat"),
+        ("Sana'a", 15.3694, 44.1910, "Asia/Aden"),
+        ("Manama", 26.2285, 50.5860, "Asia/Bahrain"),
+        ("Jerusalem", 31.7683, 35.2137, "Asia/Jerusalem"),
+        ("Ankara", 39.9334, 32.8597, "Europe/Istanbul"),
+        ("Izmir", 38.4192, 27.1287, "Europe/Istanbul"),
+        ("Jeddah", 21.5433, 39.1728, "Asia/Riyadh"),
+        ("Basra", 30.5085, 47.7804, "Asia/Baghdad"),
+        ("Erbil", 36.1911, 44.0092, "Asia/Baghdad"),
+        ("Gaziantep", 37.0662, 37.3833, "Europe/Istanbul"),
     ],
     "Asia": [
-        ("Tokyo", 35.6762, 139.6503),
-        ("Beijing", 39.9042, 116.4074),
-        ("Mumbai", 19.0760, 72.8777),
-        ("Singapore", 1.3521, 103.8198),
-        ("Seoul", 37.5665, 126.9780),
-        ("Bangkok", 13.7563, 100.5018),
+        ("Tokyo", 35.6762, 139.6503, "Asia/Tokyo"),
+        ("Beijing", 39.9042, 116.4074, "Asia/Shanghai"),
+        ("Mumbai", 19.0760, 72.8777, "Asia/Kolkata"),
+        ("Singapore", 1.3521, 103.8198, "Asia/Singapore"),
+        ("Seoul", 37.5665, 126.9780, "Asia/Seoul"),
+        ("Bangkok", 13.7563, 100.5018, "Asia/Bangkok"),
+        ("Hong Kong", 22.3193, 114.1694, "Asia/Hong_Kong"),
+        ("Shanghai", 31.2304, 121.4737, "Asia/Shanghai"),
+        ("Delhi", 28.7041, 77.1025, "Asia/Kolkata"),
+        ("Jakarta", -6.2088, 106.8456, "Asia/Jakarta"),
+        ("Manila", 14.5995, 120.9842, "Asia/Manila"),
+        ("Taipei", 25.0330, 121.5654, "Asia/Taipei"),
+        ("Kuala Lumpur", 3.1390, 101.6869, "Asia/Kuala_Lumpur"),
+        ("Ho Chi Minh City", 10.8231, 106.6297, "Asia/Ho_Chi_Minh"),
+        ("Hanoi", 21.0285, 105.8542, "Asia/Bangkok"),
+        ("Dhaka", 23.8103, 90.4125, "Asia/Dhaka"),
+        ("Karachi", 24.8607, 67.0011, "Asia/Karachi"),
+        ("Colombo", 6.9271, 79.8612, "Asia/Colombo"),
+        ("Yangon", 16.8661, 96.1951, "Asia/Yangon"),
+        ("Kathmandu", 27.7172, 85.3240, "Asia/Kathmandu"),
+        ("Tashkent", 41.2995, 69.2401, "Asia/Tashkent"),
+        ("Almaty", 43.2220, 76.8512, "Asia/Almaty"),
     ],
     "Oceania": [
-        ("Sydney", -33.8688, 151.2093),
-        ("Melbourne", -37.8136, 144.9631),
-        ("Auckland", -36.8509, 174.7645),
-        ("Brisbane", -27.4698, 153.0251),
-        ("Perth", -31.9505, 115.8605),
+        ("Sydney", -33.8688, 151.2093, "Australia/Sydney"),
+        ("Melbourne", -37.8136, 144.9631, "Australia/Melbourne"),
+        ("Auckland", -36.8509, 174.7645, "Pacific/Auckland"),
+        ("Brisbane", -27.4698, 153.0251, "Australia/Brisbane"),
+        ("Perth", -31.9505, 115.8605, "Australia/Perth"),
+        ("Adelaide", -34.9285, 138.6007, "Australia/Adelaide"),
+        ("Canberra", -35.2809, 149.1300, "Australia/Sydney"),
+        ("Wellington", -41.2866, 174.7756, "Pacific/Auckland"),
+        ("Christchurch", -43.5321, 172.6362, "Pacific/Auckland"),
+        ("Gold Coast", -28.0167, 153.4000, "Australia/Brisbane"),
+        ("Hobart", -42.8821, 147.3272, "Australia/Hobart"),
+        ("Darwin", -12.4634, 130.8456, "Australia/Darwin"),
+        ("Port Moresby", -9.4780, 147.1500, "Pacific/Port_Moresby"),
+        ("Suva", -18.1248, 178.4501, "Pacific/Fiji"),
+        ("Nouméa", -22.2763, 166.4572, "Pacific/Noumea"),
+        ("Papeete", -17.5390, -149.5678, "Pacific/Tahiti"),
+        ("Guam", 13.4443, 144.7937, "Pacific/Guam"),
+        ("Honolulu", 21.3099, -157.8581, "Pacific/Honolulu"),
+        ("Apia", -13.8507, -171.7511, "Pacific/Apia"),
+        ("Nuku'alofa", -21.1390, -175.2049, "Pacific/Tongatapu"),
+        ("Port Vila", -17.7333, 168.3167, "Pacific/Efate"),
+        ("Honiara", -9.4456, 159.9729, "Pacific/Guadalcanal"),
     ],
 }
 
@@ -195,51 +325,52 @@ def _round_temp(t: float | None) -> str:
     return str(int(round(t)))
 
 
-def _weather_location_entry(name: str, lat: float, lon: float) -> dict[str, Any]:
-    """Build one location dict; used for parallel fetch."""
+def _weather_location_entry(name: str, lat: float, lon: float, tz: str = "") -> dict[str, Any]:
+    """Build one location dict; used for parallel fetch. Includes timezone for local time display."""
     one = _fetch_one_weather(lat, lon)
-    if one is not None:
-        return {
-            "name": name,
-            "temp": _round_temp(one.get("temp")),
-            "temp_high": _round_temp(one.get("temp_high")),
-            "temp_low": _round_temp(one.get("temp_low")),
-            "conditions": one["conditions"],
-            "weather_code": one.get("weather_code", 0),
-        }
-    return {
+    entry: dict[str, Any] = {
         "name": name,
         "temp": "—",
         "temp_high": "—",
         "temp_low": "—",
         "conditions": "No data",
         "weather_code": 0,
+        "timezone": tz,
     }
+    if one is not None:
+        entry.update({
+            "temp": _round_temp(one.get("temp")),
+            "temp_high": _round_temp(one.get("temp_high")),
+            "temp_low": _round_temp(one.get("temp_low")),
+            "conditions": one["conditions"],
+            "weather_code": one.get("weather_code", 0),
+        })
+    return entry
 
 
 @router.get("/weather")
 def weather():
-    """Weather Watch panel: Open-Meteo current + daily high/low by continent. Fetches in parallel to avoid timeout."""
-    # Flatten to (continent, name, lat, lon) preserving order; fetch in parallel
-    tasks: list[tuple[str, str, float, float]] = []
+    """Weather Watch panel: Open-Meteo current + daily high/low by continent. Up to 22 cities per continent with timezone for local time."""
+    tasks: list[tuple[str, str, float, float, str]] = []
     for continent, cities in WEATHER_BY_CONTINENT.items():
-        for name, lat, lon in cities:
-            tasks.append((continent, name, lat, lon))
+        for name, lat, lon, tz in cities:
+            tasks.append((continent, name, lat, lon, tz))
     results: list[tuple[str, dict[str, Any]]] = []
-    futures = {_weather_executor.submit(_weather_location_entry, n, la, lo): (cont, n, la, lo) for cont, n, la, lo in tasks}
+    futures = {
+        _weather_executor.submit(_weather_location_entry, n, la, lo, tz): (cont, n, la, lo, tz)
+        for cont, n, la, lo, tz in tasks
+    }
     for fut in as_completed(futures):
-        cont, name, _lat, _lon = futures[fut]
+        cont, name, _lat, _lon, tz = futures[fut]
         try:
             entry = fut.result()
             results.append((cont, entry))
         except Exception:
-            results.append((cont, {"name": name, "temp": "—", "temp_high": "—", "temp_low": "—", "conditions": "No data", "weather_code": 0}))
-    # Reassemble by continent in original order
+            results.append((cont, {"name": name, "temp": "—", "temp_high": "—", "temp_low": "—", "conditions": "No data", "weather_code": 0, "timezone": tz}))
     order = list(WEATHER_BY_CONTINENT.keys())
     by_continent: dict[str, list[dict[str, Any]]] = {c: [] for c in order}
     for cont, entry in results:
         by_continent[cont].append(entry)
-    # Preserve city order within each continent (results are unordered; re-sort by task order)
     continents_out = []
     for continent in order:
         cities = WEATHER_BY_CONTINENT[continent]
@@ -953,6 +1084,37 @@ def news():
         return _fetch_news()
     except Exception:
         return {"status": "error", "source": "rss", "feeds": [], "message": "News temporarily unavailable."}
+
+
+# Weather News: 3 weather/climate headlines for Weather News panel (client refreshes every 30s)
+WEATHER_NEWS_RSS_URL = "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml"
+WEATHER_NEWS_MAX_ITEMS = 3
+
+
+def _fetch_weather_news() -> dict[str, Any]:
+    cache_key = "weather_news"
+    if cache_key in _weather_news_cache:
+        return _weather_news_cache[cache_key]
+    items: list[dict[str, Any]] = []
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.get(WEATHER_NEWS_RSS_URL)
+            r.raise_for_status()
+            items, _ = _parse_rss_feed(r.text, "BBC", WEATHER_NEWS_RSS_URL, WEATHER_NEWS_MAX_ITEMS, None)
+    except Exception:
+        pass
+    out = {"status": "ok", "source": "rss", "items": items}
+    _weather_news_cache[cache_key] = out
+    return out
+
+
+@router.get("/weather/news")
+def weather_news():
+    """Three weather/climate headlines (BBC Science & Environment). For Weather News panel; client shows with 25s cycle, 30s refresh."""
+    try:
+        return _fetch_weather_news()
+    except Exception:
+        return {"status": "error", "source": "rss", "items": [], "message": "Weather news temporarily unavailable."}
 
 
 # BTC ETF Tracker: stub data matching World Monitor layout (Net Flow, Est. Flow, Total Vol, ETFs; table TICKER, ISSUER, EST. FLOW, VOLUME, CHANGE)

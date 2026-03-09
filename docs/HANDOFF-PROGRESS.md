@@ -62,7 +62,7 @@ Use this document to continue development with a new agent or session. It summar
   - Backend (Python/FastAPI), Go client (recommended), Python client (alternative). OpenSpec in `openspec/changes/add-pi-terminal-world-monitor-client/`.
 
 - **Backend (VPS 209.38.141.129)**  
-  - **Endpoints:** `GET /health`, `GET /panels`, `GET /panels/world-clock`, `GET /panels/weather`, `GET /panels/news`, `GET /panels/global-situation-map` (kept for future), `GET /panels/crypto/*`, …  
+  - **Endpoints:** `GET /health`, `GET /panels`, `GET /panels/world-clock`, `GET /panels/weather`, `GET /panels/weather/news`, `GET /panels/news`, `GET /panels/global-situation-map` (kept for future), `GET /panels/crypto/*`, …  
   - **News:** `GET /panels/news` — 8 panels; **each panel aggregates 3 RSS feeds** from different outlets (e.g. World: BBC, Reuters, CNN; US: BBC, Reuters, NPR; Europe: DW, BBC, Euronews). Items merged, sorted by date, deduped by link; up to 20 per panel. Each item: `title`, `link`, `pub_date`, `description`, **source** (outlet). RSS, 5 min cache.  
   - **Crypto top:** 56 coins, slice by `range_start` + `per_page` (5–25), 1h/24h/7d.  
   - **Crypto news:** CoinDesk RSS; each item has **source** (feed title → link hostname → feed URL hostname), description (blurb). 5 min cache.  
@@ -75,7 +75,7 @@ Use this document to continue development with a new agent or session. It summar
   - **Env:** `BACKEND_URL`, `CYCLE_SECONDS`, `GRID_COLS` / `GRID_ROWS`. Press **Q** to quit.  
   - **Crypto panel:** 5 sub-panels (Top Cryptos 56/8s | Stablecoins 8s + Gainers/Losers 10s; News 20s | BTC ETF 6s).  
   - **News panel:** 8 sub-panels (4 top, 4 bottom); each panel shows **mixed outlets** (e.g. BBC, Reuters, CNN, NPR, DW, Al Jazeera, Euronews, NYT). **X NEW** (backlog), **25s** timer with **5s offset**, **headline + source + blurb**. Feed data refreshed every 30s.  
-  - **Weather, World Clock:** use `panelContent()` and grid refresh on main cycle.
+  - **Weather / World Clock:** **Top-right panel** (old Weather slot) is **empty**. **Bottom-right** (old World Clock slot) is split: **Weather Watch** (left) and **Weather News** (right). Weather Watch: 22 cities per continent, **local time** per city, 4s continent cycle. Weather News: 3 headlines from BBC Science & Environment, **timer in title** (25s), cycle every 25s, refresh every 30s; headline + description per item.
 
 - **Deployment and docs**  
   - docs/DEPLOY-BACKEND.md, INSTALL-PI.md, contrib/systemd/, AGENTS.md.
@@ -196,6 +196,12 @@ Client-only changes: just rebuild and run the Go client.
 
 - **`GET /panels/crypto/btc-etf`**  
   Stub: `net_flow_label`, `est_flow_m`, `total_vol_m`, `etfs_up`, `etfs_down`, `etfs[]`.
+
+- **`GET /panels/weather`**  
+  `{ "status", "continents": [ { "name", "locations": [ { "name", "temp", "temp_high", "temp_low", "conditions", "weather_code", "timezone" } ] } ] }` — Up to 22 cities per continent; each location has IANA timezone for local time. Client: Weather Watch (bottom-right left half), 4s continent cycle.
+
+- **`GET /panels/weather/news`**  
+  `{ "status", "source": "rss", "items": [ { "title", "link", "pub_date", "description", "source" } ] }` — 3 items from BBC Science & Environment. Client: Weather News (bottom-right right half), 25s cycle, 30s refresh, timer in title.
 
 - **`GET /panels/global-situation-map`**  
   (Kept for future.) `{ "status", "regions", "summary", "layers", … }` — Not shown in default grid; see “Global Situation Map” below.
