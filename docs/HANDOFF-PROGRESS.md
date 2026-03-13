@@ -4,9 +4,19 @@ Use this document to continue development with a new agent or session. It summar
 
 ---
 
+## Latest changes (captured here)
+
+- **News source (outlet)** – Each headline's `source` is the real outlet: feed title → entry link hostname → feed URL hostname (`_source_from_url` in `backend/app/panels.py`). Applied to both 8 News panels and Crypto news.
+- **News panels diversified** – Each of the 8 panels now aggregates **3 RSS feeds** from different outlets (e.g. World: BBC, Reuters, CNN; US: BBC, Reuters, NPR). Items merged, sorted by date, deduped by link; up to 20 per panel.
+- **Weather layout** – **Top-right** (old Weather slot) is **empty**. **Bottom-right** (old World Clock slot) is split into **Weather Watch** (left) and **Weather News** (right).
+- **Weather Watch** – **22 cities per continent** (was ~5–6). Each location has IANA **timezone**; client shows **local time** (HH:MM) per city. Continent cycle every 4s. Backend: `WEATHER_BY_CONTINENT` expanded; each entry `(name, lat, lon, timezone)`.
+- **Weather News** – New panel. **Backend:** `GET /panels/weather/news` returns 3 items from BBC Science & Environment RSS; 30s cache. **Client:** Timer in title (25s countdown), cycle one article every 25s, refresh data every 30s; headline + source + description per item.
+
+---
+
 ## Session summary (for next agent)
 
-**Context:** This session **replaced the Global Situation panel with an 8 News panel** (4 top, 4 bottom): World, US, Europe, Middle East, Africa, Asia-Pacific, Energy & Resources, Government. Each sub-panel shows **X NEW** (backlog count), **10s** timer, and cycles **headline + article/blurb** (like crypto news). GSM is scrapped from the UI; backend and docs kept for future. Crypto dashboard (56 coins, stablecoins, gainers/losers, crypto news, BTC ETF) is unchanged—do not re-implement.
+**Context:** This session **replaced the Global Situation panel with an 8 News panel** (4 top, 4 bottom): World, US, Europe, Middle East, Africa, Asia-Pacific, Energy & Resources, Government. Each sub-panel shows **X NEW** (backlog count), **10s** timer, and cycles **headline + article/blurb** (like crypto news). GSM is scrapped from the UI; backend and docs kept for future. Crypto dashboard (56 coins, stablecoins, gainers/losers, crypto news, BTC ETF) is unchanged—do not re-implement. **See “Latest changes” above** for news outlet resolution, diversified news feeds, weather layout (empty top-right, Weather Watch + Weather News in bottom-right), 22 cities + local time, and Weather News panel.
 
 ### Backend changes (all in `backend/app/panels.py`)
 
